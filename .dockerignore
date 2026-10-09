@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.pytest_cache
+**/__pycache__
+*.egg-info
+third_party
+generated
+data
+models
+web/node_modules
+*.pt
+*.mp4
+*.gif
+MUJOCO_LOG.TXT
+context_project.md

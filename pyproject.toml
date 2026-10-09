@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homehand"
+version = "1.0.0"
+description = "Unitree G1 + two Inspire hands tidying a kitchen counter in MuJoCo: perception, planning, imitation learning, safety and a web dashboard."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT (code). Robot/object assets keep their own licenses, see README." }
+dependencies = [
+    "mujoco>=3.2",
+    "mink>=0.0.10",
+    "daqp",
+    "numpy>=1.24",
+    "scipy",
+    "pillow",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "typer>=0.12",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+learn = ["torch>=2.2", "ultralytics>=8.2", "opencv-python-headless", "imageio", "imageio-ffmpeg"]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+homehand = "homehand.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["homehand*"]
+
+[tool.setuptools.package-data]
+homehand = ["assets/*.xml", "web_static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: full-episode simulation tests"]

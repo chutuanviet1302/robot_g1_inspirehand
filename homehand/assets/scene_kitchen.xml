@@ -1,0 +1,57 @@
+<mujoco model="homehand_kitchen">
+  <include file="g1_inspire.xml"/>
+
+  <statistic center="0.3 0 0.9" extent="1.0"/>
+
+  <visual>
+    <headlight diffuse="0.55 0.55 0.55" ambient="0.25 0.25 0.25" specular="0.1 0.1 0.1"/>
+    <global azimuth="200" elevation="-25" offwidth="1280" offheight="960"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.86 0.88 0.9" rgb2="0.55 0.6 0.66" width="512" height="3072"/>
+    <texture type="2d" name="floor_tex" builtin="checker" rgb1="0.72 0.68 0.62" rgb2="0.66 0.62 0.56" width="300" height="300"/>
+    <material name="floor_mat" texture="floor_tex" texuniform="true" texrepeat="4 4" reflectance="0.05"/>
+    <material name="counter_mat" rgba="0.93 0.92 0.89 1" specular="0.2"/>
+    <material name="bin_mat" rgba="0.25 0.45 0.65 1"/>
+  </asset>
+
+  <default>
+    <default class="fixture">
+      <geom type="box" condim="3" friction="0.8 0.01 0.001" group="0"/>
+    </default>
+    <default class="object">
+      <geom condim="4" friction="1.0 0.01 0.001" solref="0.004 1" group="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light name="sun" pos="1 0 3.5" dir="0 0 -1" directional="true" diffuse="0.35 0.35 0.35" castshadow="false"/>
+    <light name="key" pos="0.4 -0.6 2.4" dir="0 0.3 -1" diffuse="0.6 0.6 0.6" castshadow="true"/>
+    <light name="fill" pos="0.4 0.8 2.2" dir="0 -0.3 -1" diffuse="0.3 0.3 0.3" castshadow="false"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="floor_mat"/>
+
+    <!-- cameras: "head" is the robot's RGB-D head camera used by perception (the base is fixed, so a
+         world-fixed camera at the head is equivalent); the others are viewpoints for the web UI -->
+    <camera name="head" pos="0.09 0 1.24" xyaxes="0 -1 0 0.8 0 0.6" fovy="70"/>
+    <camera name="front" pos="1.35 -0.55 1.45" xyaxes="0.38 0.925 0 -0.45 0.185 0.875"/>
+    <camera name="overview" pos="0.95 -1.05 1.35" xyaxes="0.74 0.67 0 -0.3 0.33 0.9"/>
+    <camera name="top" pos="0.4 0 2.0" xyaxes="0 -1 0 1 0 0"/>
+
+    <!-- counter: front edge x=0.20, top z=0.80 -->
+    <geom name="counter" class="fixture" pos="0.55 0 0.4" size="0.35 0.65 0.4" material="counter_mat"/>
+
+    <!-- storage bin (open box), inner 27 x 30 cm, 10 cm walls, centred at (0.56, 0, 0.80) -->
+    <body name="bin" pos="0.56 0 0.8">
+      <geom name="bin_bottom" class="fixture" pos="0 0 0.005" size="0.145 0.16 0.005" material="bin_mat"/>
+      <geom class="fixture" pos="0.14 0 0.05" size="0.005 0.16 0.05" material="bin_mat"/>
+      <geom class="fixture" pos="-0.14 0 0.05" size="0.005 0.16 0.05" material="bin_mat"/>
+      <geom class="fixture" pos="0 0.155 0.05" size="0.145 0.005 0.05" material="bin_mat"/>
+      <geom class="fixture" pos="0 -0.155 0.05" size="0.145 0.005 0.05" material="bin_mat"/>
+      <site name="bin_center" pos="0 0 0.01" size="0.01" rgba="0 1 0 0.3" group="4"/>
+    </body>
+
+    <!-- graspable objects are appended here by homehand.model.build (YCB meshes or primitives) -->
+  </worldbody>
+</mujoco>

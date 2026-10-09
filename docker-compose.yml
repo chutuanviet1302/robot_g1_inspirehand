@@ -1,0 +1,61 @@
+# HomeHand containers. Assets and results live on the host (mounted volumes), the image only holds the code.
+#
+#   docker compose build
+#   docker compose run --rm homehand build-model           # generated/ from third_party/ (once)
+#   docker compose up web                                   # dashboard on http://localhost:8000
+#   xhost +SI:localuser:$USER && docker compose run --rm view     # native MuJoCo viewer on the host display
+#   docker compose run --rm test                            # unit + episode tests
+#   docker compose run --rm homehand evaluate --controller expert --episodes 30
+#
+# Memory: every simulation worker needs ~0.9 GB; the container is capped at 6 GB and `homehand` already
+# limits its worker count by the free RAM it sees.
+
+x-homehand: &homehand
+  image: homehand:latest
+  build:
+    context: .
+    network: host          # the default bridge network breaks large wheel downloads on some hosts (MTU)
+    args:
+      EXTRAS: ${HOMEHAND_EXTRAS:-dev}
+      UID: ${UID:-1000}
+  volumes:
+    - ./third_party:/app/third_party:ro
+    - ./generated:/app/generated
+    - ./data:/app/data
+    - ./models:/app/models
+  mem_limit: 6g
+  shm_size: 1g
+
+services:
+  homehand:
+    <<: *homehand
+    command: ["--help"]
+
+  web:
+    <<: *homehand
+    command: ["serve", "--host", "0.0.0.0", "--no-open-browser"]
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  view:
+    <<: *homehand
+    profiles: ["gui"]
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      MUJOCO_GL: glfw
+      PYOPENGL_PLATFORM: ""
+    volumes:
+      - ./third_party:/app/third_party:ro
+      - ./generated:/app/generated
+      - ./data:/app/data
+      - ./models:/app/models
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/dri:/dev/dri       # GPU-accelerated OpenGL through Mesa (remove on hosts without /dev/dri)
+    command: ["view", "--seed", "5", "--perception", "oracle", "--loop"]
+
+  test:
+    <<: *homehand
+    profiles: ["test"]
+    entrypoint: ["python", "-m", "pytest", "-q"]
+    command: []
