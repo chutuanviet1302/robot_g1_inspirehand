@@ -150,6 +150,36 @@ có ở đây → chạy lại toàn bộ bằng `scripts/run_all.py`.
   10k), Diffusion 30k; sim-gap 25 ep/mức (trước 10).
 - Bài học: viewer `--loop` chạy song song lúc train làm ACT chậm ~7× (tranh GPU + RAM) → không mở viewer khi train.
 
+## 4f. Phiên 6 (2026-10-10): quỹ đạo giống người + SmolVLA (nhánh `human-motion`)
+
+- **Chẩn đoán lỗi** (50 ep, ground truth, expert v1): 8/11 vật mất KHÔNG phải vật đang gắp — cẳng tay chúi xuống
+  sau bàn tay lúc mang tới rổ quẹt đỉnh hộp đường ở ô trong (seed 0, 12, 24), ngón chạm vật bên cạnh khi tiếp cận.
+- **Expert v2** (`control/human_motion.py`, `clearance.py`; `HOMEHAND_EXPERT_STYLE=v1` = bản cũ):
+  ghép reach+descend và lift+transport thành 1 chuyển động; profile vận tốc bất đối xứng v~t²(1−t)³ (đỉnh 40 %);
+  Fitts làm cận dưới thời lượng; preshape bàn tay trong lúc với tới; kiểm tra khoảng hở cổ tay/ngón với vật khác
+  (nâng điểm thả, hoãn vật mà tư thế nắm chạm vật bên cạnh). Bài học: ghép luôn pha approach cuối làm tay PD
+  cắt góc và đẩy vật cao (5/50 ep) → approach giữ riêng (`HOMEHAND_BLEND_APPROACH=0`).
+- Số liệu: ground truth 50 ep: v1 185/200 → v2 188/200; YOLO 50 ep: v1 174/200 (66 % sạch) vs v2 174/200 (60 %,
+  0 dừng an toàn) — ngang nhau. Giống người (`scripts/human_likeness.py`): mang vật 0 điểm dừng (v1: 1),
+  SPARC −1.67 (92 % trong khoảng người; v1 −2.27, 0 %); với tới: đỉnh vận tốc ở 0.34 (người 0.35–0.45), còn 1
+  điểm dừng có chủ đích trước khi tiến sát vật; tốc độ lòng bàn tay còn nhiều đỉnh do nội suy không gian khớp.
+- **Render GPU**: trên laptop Optimus, MuJoCo render bằng Intel iGPU (250–380 ms/ảnh) → `SHIM_MCCOMPAT` trong
+  `homehand/__init__.py` ép GTX 1650 (1.5–13 ms/ảnh). Trước đó sinh ảnh YOLO / eval YOLO chậm vì lý do này.
+- **VLA**: camera cổ tay 2 tay (`L_wrist_cam`, `R_wrist_cam`), `homehand collect-vla` → 568 demo / 216k khung /
+  200 ep (3 camera 256², 26 state/action, 4 cách diễn đạt câu lệnh + 1 giữ lại để test);
+  `homehand/data/export_lerobot.py` (chạy bằng `.venv-vla`, LeRobot 0.6.1, H.264 + streaming encoding — AV1 mặc
+  định quá chậm: 4 h) → 320 demo cho Kaggle; `kaggle/smolvla_finetune.ipynb` + `kaggle/README.md` (T4, 10k bước);
+  `policy/smolvla_skill.py` + `scripts/eval_smolvla.py` (đã thử end-to-end với checkpoint 2 bước: ~97 ms/bước).
+- **SmolVLA trên Kaggle** (notebook `notebookcf90b4f805`, dataset `homehand-vla-v1` riêng tư): T4 không có bf16 →
+  VLM bf16 chạy giả lập > 7 s/bước (lần chạy 10k bị huỷ); vá `smolvlm_with_expert.py` sang float32 + `use_amp=true`
+  → 1.4 s/bước; 3 000 bước (≈ 70 phút, loss 2.9 → 0.045). Model ở `models/smolvla_homehand` (đã vá float32 cả ở
+  `.venv-vla`). Đánh giá (oracle, nominal, 10 ep): **0/10 sạch, 2/40 vật, 3 dừng an toàn** (lực tới 740 N ấn bàn);
+  câu lệnh diễn đạt mới (5 ep): 3/20 vật, 1 dừng an toàn.
+  Kết luận: pipeline chạy end-to-end, policy chưa đủ train (cần ≥ 20k bước ≈ 8 h T4). Zip phải tạo bằng Python
+  (PowerShell 5.1 `Compress-Archive` ghi `\` → Kaggle từ chối).
+- Windows + LeRobot: repo id thành `lerobot\smolvla_base` → tải về `models/smolvla_base`; symlink `last` lỗi
+  quyền (chỉ Windows); torchcodec không nạp được → backend pyav; tên camera phải là camera1..3 (smolvla_base).
+
 ## 5. Con số hiện tại (phiên 5, Windows, 2026-10-10 — chạy lại toàn bộ bằng `scripts/run_all.py`, ~11 giờ)
 
 Chi tiết đầy đủ: `RESULTS.md`. YOLO perception trừ khi ghi khác, 4 vật/episode (~một nửa vật ô ngoài nằm), CI Wilson 95%.
@@ -182,8 +212,9 @@ Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên má
 
 1. Giảm knocked_over/dropped của expert trong cảnh đầy đủ (vd. chừa khoảng cách khi tay đi ngang vật bên cạnh,
    thứ tự gắp theo nguy cơ va chạm) — grasp riêng lẻ đã ~99%.
-2. Diffusion Policy: thử chunk dài hơn / nhiều dữ liệu hơn / train thêm; ghi rõ kém ACT khi trình bày.
-3. VLA (SmolVLA) chưa làm: cần ảnh + câu lệnh, fine-tune trên Kaggle (GPU 4 GB không đủ).
+2. SmolVLA: train tiếp ≥ 20k bước (resume từ checkpoint trên Kaggle, ~8 h T4) rồi đánh giá lại; Diffusion Policy
+   cũng cần train thêm.
+3. Expert v2 còn chậm hơn người ~4× và đi vòng cao; thu demo / train lại ACT bằng expert v2.
 4. Viewer trong Docker (X11) chưa thử; lớp `inspire_real.py` chưa thử trên tay thật.
 5. Vật nằm chỉ ở ô ngoài và trong vùng hướng tay với tới (giới hạn động học G1 + tay úp) — ghi rõ khi trình bày.
 

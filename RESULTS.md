@@ -24,6 +24,9 @@ Reproduce everything with `python scripts/run_all.py`.
 | 11 | act_expert_v1 | yolo | high | 25 | 72% [52–86] | 91% [84–95] | 0 |
 | 12 | diffusion_expert_v1 | yolo | high | 25 | 16% [6–35] | 62% [52–71] | 5 |
 | 13 | expert | oracle | nominal | 50 | 76% [63–86] | 92% [88–95] | 1 |
+| 14 | expert v2 (human-like) | yolo | nominal | 50 | 60% [46–72] | 87% [82–91] | 0 |
+| 15 | smolvla | oracle | nominal | 10 | 0% [0–28] | 5% [1–16] | 3 |
+| 16 | smolvla (held-out phrasing) | oracle | nominal | 5 | 0% [0–43] | 15% [5–36] | 1 |
 
 ## Failure taxonomy (objects)
 
@@ -42,6 +45,9 @@ Reproduce everything with `python scripts/run_all.py`.
 | 11 act_expert_v1 / high | 91 | 2 | 1 | 1 | 1 | 3 | 1 | 0 | 0 |
 | 12 diffusion_expert_v1 / high | 62 | 9 | 9 | 10 | 0 | 6 | 4 | 0 | 0 |
 | 13 expert / nominal | 185 | 1 | 0 | 1 | 4 | 8 | 1 | 0 | 0 |
+| 14 expert v2 (human-like) / nominal | 174 | 2 | 5 | 7 | 2 | 7 | 3 | 0 | 0 |
+| 15 smolvla / nominal | 2 | 12 | 4 | 11 | 0 | 11 | 0 | 0 | 0 |
+| 16 smolvla (held-out phrasing) / nominal | 3 | 2 | 2 | 3 | 0 | 9 | 1 | 0 | 0 |
 
 ## Per object / grasp type (nominal runs)
 
@@ -63,6 +69,18 @@ Reproduce everything with `python scripts/run_all.py`.
 | 13 expert | mustard bottle | low power wrap | 90% [79–96] |
 | 13 expert | sugar box | palmar box grasp | 84% [71–92] |
 | 13 expert | potted meat can | tripod pinch | 100% [93–100] |
+| 14 expert v2 (human-like) | tomato soup can | cylindrical power wrap | 84% [71–92] |
+| 14 expert v2 (human-like) | mustard bottle | low power wrap | 84% [71–92] |
+| 14 expert v2 (human-like) | sugar box | palmar box grasp | 86% [74–93] |
+| 14 expert v2 (human-like) | potted meat can | tripod pinch | 94% [84–98] |
+| 15 smolvla | tomato soup can | cylindrical power wrap | 10% [2–40] |
+| 15 smolvla | mustard bottle | low power wrap | 0% [0–28] |
+| 15 smolvla | sugar box | palmar box grasp | 10% [2–40] |
+| 15 smolvla | potted meat can | tripod pinch | 0% [0–28] |
+| 16 smolvla (held-out phrasing) | tomato soup can | cylindrical power wrap | 20% [4–62] |
+| 16 smolvla (held-out phrasing) | mustard bottle | low power wrap | 20% [4–62] |
+| 16 smolvla (held-out phrasing) | sugar box | palmar box grasp | 20% [4–62] |
+| 16 smolvla (held-out phrasing) | potted meat can | tripod pinch | 0% [0–43] |
 
 ## Grasp benchmark (single object, ground-truth pose)
 
@@ -107,6 +125,29 @@ or collision) and the objects, bin or counter.
 | episodes | clean | objects cleared | protective stops | mean duration | RMS joint acc. | RMS joint jerk | max interpenetration |
 |---|---|---|---|---|---|---|---|
 | 24 | 18 | 88/96 | 0 | 54.2 s | 2.0 rad/s² | 56.3 rad/s³ | 2.0 mm |
+
+## Human-likeness of the motion (expert v1 vs v2, ground-truth poses)
+
+`python scripts/human_likeness.py --style v1|human --seeds 0-49`: kinematic markers of every reach (start of
+the reach to the start of the grasp) and carry (lift + transport) from the palm trajectory, low-passed
+as in human motion-capture studies. Human reference values: Flash & Hogan 1985, Marteniuk et al. 1987,
+Jeannerod 1984, Balasubramanian et al. 2015 (SPARC).
+
+| | human | v1 | v2 (human-like) |
+|---|---|---|---|
+| objects in the bin | | 185/200 | 186/200 |
+| clean episodes | | 39/50 | 38/50 |
+| reach: duration s | ~1 s | 4.498 | 4.728 |
+| reach: stops | 0 | 2.088 | 1.065 |
+| reach: time to peak | 0.35–0.45 | 0.451 | 0.345 |
+| reach: sparc | −1.4…−1.8 | -2.33 | -2.081 |
+| reach: straightness | 1.0–1.2 | 1.889 | 1.842 |
+| reach: peak aperture time | 0.6–0.7 | 0.327 | 0.622 |
+| carry: duration s | ~1 s | 3.945 | 3.502 |
+| carry: stops | 0 | 1.026 | 0.0 |
+| carry: time to peak | 0.35–0.45 | 0.753 | 0.509 |
+| carry: sparc | −1.4…−1.8 | -2.273 | -1.673 |
+| carry: straightness | 1.0–1.2 | 2.204 | 2.104 |
 
 ## Sim-gap factors one at a time (expert, ground-truth poses)
 

@@ -176,6 +176,30 @@ Contact geometry: the palm collides with the convex hull of its own visual mesh 
 to 5 mm inside the rendered palm), so what you see never sinks into an object or the bin (measured worst case
 over 24 episodes: 1 mm, fingers included).
 
+**Human-like motion** (`homehand/control/human_motion.py`, `clearance.py`; expert v2, `HOMEHAND_EXPERT_STYLE=v1`
+restores the previous one). Principles from human motor control, measured with `scripts/human_likeness.py`:
+
+* the primitives of one reach (swing over + come down behind the object) and of one carry (lift + transport) are
+  blended into **one movement** with a single speed profile, instead of stopping at every via pose; the slow
+  final approach onto the object stays a separate movement (blended into it, the PD-tracked hand cut the corner
+  and pushed tall objects);
+* reach-to-grasp uses a **skewed bell-shaped speed profile** (v ~ t²(1−t)³: peak at 40 %, long deceleration
+  towards the object, Marteniuk 1987) with a **Fitts' law** lower bound on its duration;
+* the hand **pre-shapes during the reach** (thumb first, fully open just before the final approach) instead of
+  opening in one go (Jeannerod 1984);
+* **clearance to the other objects**: a failure analysis of 50 episodes showed that 8 of 11 lost objects were
+  *not* the one being picked (the forearm, sloping down behind the hand over the bin, touched the top of a tall box
+  in the inner slot; fingertips brushed neighbours). The arm is checked as probe spheres against the other
+  objects' boxes: the release point goes up while the carry would touch one, and an object whose grasp would
+  brush a neighbour waits until the neighbour is gone (the easy ones first).
+
+**Vision-language-action policy** (`homehand/data/record_vla.py`, `export_lerobot.py`, `policy/smolvla_skill.py`,
+`kaggle/`). Eye-in-hand cameras on both hands + the head camera (256×256), the 26 joint positions and an instruction
+("pick up the mustard bottle with the left hand and put it in the bin", four phrasings + one held out for testing)
+are recorded for every successful pick of the expert and exported as a LeRobotDataset; **SmolVLA** is fine-tuned on
+Kaggle (free T4, see `kaggle/README.md`) and runs as the skill inside the same planner and safety layer
+(`scripts/eval_smolvla.py`). The planner stays the high level (which object, which hand); the VLA does the skill.
+
 **Learning** (`homehand/policy`). Every successful skill execution of the expert inside full tidy episodes is
 a demonstration (features: active arm + hand joints, palm position, perceived object pose, grasp type, side,
 progress → 13 joint targets). **ACT** (CVAE + transformer, chunk 25, temporal ensembling) and **Diffusion
@@ -231,6 +255,15 @@ unless stated, 95 % Wilson intervals:
 * **Sim gap**: one factor at a time at the `high` extreme (16 episodes each), the expert depends most on
   **finger–object friction** (×0.5: 52/64 objects vs 61/64 nominal, mostly knocked over), then on **pose noise**
   (12 mm: 56/64) and **finger stiffness** (×0.6: 58/64); 120 ms of latency changes nothing.
+* **Human-like motion (expert v2)**: same success as v1 (YOLO, 50 ep.: 174/200 objects for both; ground truth:
+  186 vs 185/200) with 4 of 5 kinematic markers now in the human range — no stop while carrying (v1: 1), carry
+  SPARC −1.67 (v1 −2.27), reach speed peak at 34 % of the movement, hand fully open at 62 % of the reach. Still
+  unlike a person: ~4× slower (joint speed limits) and a high, curved path around the other objects.
+* **SmolVLA** (images + language + joints, 3 k fine-tuning steps on a Kaggle T4 = ~0.4 epoch of 320 demos):
+  2/40 objects, 0/10 clean episodes, 3 protective stops (pressing on the counter, stopped by the safety layer);
+  with an instruction phrasing never seen in training 3/20 objects — the language conditioning does not break.
+  The pipeline runs end to end; the policy is far from trained (SmolVLA fine-tunes usually take ≥ 20 k steps).
+  On the T4 the VLM had to be loaded in float32 + AMP instead of bfloat16 (no bf16 hardware: > 7 s/step → 1.4 s/step).
 * **Found on the way**: the mass randomisation changed `body_mass` without `mj_setConst`, so a +20 % mass made
   grasped objects slip and the simulation diverge — earlier sim-gap numbers measured that bug. Fixed and covered
   by a regression test.

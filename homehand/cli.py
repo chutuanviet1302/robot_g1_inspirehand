@@ -130,6 +130,14 @@ def collect(name: str = "expert_v1", n: int = 400, workers: int = 6, perception:
     run(name, n_episodes=n, workers=workers, perception=perception, randomization=randomization)
 
 
+@app.command("collect-vla")
+def collect_vla(name: str = "vla_v1", n: int = typer.Option(120, "-n", "--n"), workers: int = 0,
+                perception: str = "oracle", randomization: str = "low"):
+    """Record image + language + action demonstrations (3 cameras) for a vision-language-action policy."""
+    from homehand.data.record_vla import collect as run
+    run(name, n_episodes=n, workers=workers or None, perception=perception, randomization=randomization)
+
+
 @app.command()
 def train(policy: str = typer.Option("act", help="act | diffusion"), dataset: str = "expert_v1",
           steps: int = 20000, batch_size: int = 256, lr: float = 3e-4, name: str = "",

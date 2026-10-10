@@ -69,6 +69,24 @@ def main():
                   "|---|---|---|---|---|---|---|---|",
                   f"| {q['episodes']} | {q['clean']} | {q['objects_cleared']} | {q['safety_stops']} | {q['mean_seconds']} s | "
                   f"{q['rms_joint_acc']} rad/s² | {q['rms_joint_jerk']} rad/s³ | {q['max_penetration_mm']} mm |"]
+    hl = {s: paths.DATA_DIR / f"human_likeness_{s}.json" for s in ("v1", "human")}
+    if all(p.exists() for p in hl.values()):
+        lines += ["", "## Human-likeness of the motion (expert v1 vs v2, ground-truth poses)", "",
+                  "`python scripts/human_likeness.py --style v1|human --seeds 0-49`: kinematic markers of every reach (start of",
+                  "the reach to the start of the grasp) and carry (lift + transport) from the palm trajectory, low-passed",
+                  "as in human motion-capture studies. Human reference values: Flash & Hogan 1985, Marteniuk et al. 1987,",
+                  "Jeannerod 1984, Balasubramanian et al. 2015 (SPARC).", "",
+                  "| | human | v1 | v2 (human-like) |", "|---|---|---|---|"]
+        hs = {s: json.loads(p.read_text())["summary"] for s, p in hl.items()}
+        lines.append(f"| objects in the bin | | {hs['v1']['objects']} | {hs['human']['objects']} |")
+        lines.append(f"| clean episodes | | {hs['v1']['clean']}/{hs['v1']['episodes']} | {hs['human']['clean']}/{hs['human']['episodes']} |")
+        ref = {"stops": "0", "time_to_peak": "0.35–0.45", "sparc": "−1.4…−1.8", "straightness": "1.0–1.2",
+               "peak_aperture_time": "0.6–0.7", "duration_s": "~1 s"}
+        for kind in ("reach", "carry"):
+            for key in ("duration_s", "stops", "time_to_peak", "sparc", "straightness", "peak_aperture_time"):
+                if key in hs["v1"].get(kind, {}):
+                    lines.append(f"| {kind}: {key.replace('_', ' ')} | {ref[key]} | {hs['v1'][kind][key]} | "
+                                 f"{hs['human'][kind][key]} |")
     ab = paths.DATA_DIR / "simgap_ablation.json"
     if ab.exists():
         t = json.loads(ab.read_text())["table"]

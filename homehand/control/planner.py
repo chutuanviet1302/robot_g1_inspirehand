@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from homehand.control.grasps import GRASPS, LYING_GRASP, RELAXED_HAND
+from homehand.control.clearance import min_clearance, obstacle_boxes
 from homehand.control.ik import ArmIK
+from homehand.control import skills as skills_mod
 from homehand.control.skills import PickPlaceSkill, Target, compose_action, grasp_plan
 from homehand.env.kitchen_env import BIN_HALF_INNER, BIN_WALL_TOP, BIN_XY, KitchenEnv
 from homehand.model import spec
@@ -37,6 +39,10 @@ class TidyPlanner:
                  max_attempts: int = 2, ik: ArmIK | None = None, collect: bool = False):
         self.env = env
         self.collect = collect  # record (features, action) of every skill execution for imitation learning
+        # optional recorders: step_hook(obs, action, current) on every skill step (obs = the state the action was
+        # computed from), skill_hook(current, status) when a skill execution ends
+        self.step_hook = None
+        self.skill_hook = None
         self.ik = ik or ArmIK()
         self.perception_mode = perception
         self.policy = policy
@@ -105,6 +111,8 @@ class TidyPlanner:
                 from homehand.policy.features import skill_features
                 feats = skill_features(obs, self.current["side"], self.skill.target, self.skill.steps)
             a = self.skill.act(obs)
+            if self.step_hook is not None:
+                self.step_hook(obs, a, self.current)
             if self.collect:
                 from homehand.policy.features import side_action
                 if self._demo is None:
@@ -112,6 +120,8 @@ class TidyPlanner:
                 self._demo["obs"].append(feats)
                 self._demo["action"].append(side_action(a, self.current["side"]))
             if self.skill.done:
+                if self.skill_hook is not None:
+                    self.skill_hook(self.current, self.skill.status)
                 if self._demo is not None:
                     self._demo["status"] = self.skill.status
                     self.demos.append(self._demo)
@@ -126,10 +136,14 @@ class TidyPlanner:
         return compose_action(self.ik, self.q, self.hand_cmd)
 
     def _make_skill(self, side: str, target: Target, obs: dict):
+        if self.skill_kind == "smolvla":  # vision-language-action policy (LeRobot environment)
+            from homehand.policy.smolvla_skill import SmolVLASkill
+            return SmolVLASkill(self.policy, self.env, self.ik, side, target, self.q, self.hand_cmd)
         if self.skill_kind != "expert":  # learned policy (ACT / Diffusion Policy)
             from homehand.policy.skill import PolicySkill
             return PolicySkill(self.policy, self.ik, side, target, self.q, self.hand_cmd)
-        return PickPlaceSkill(self.ik, side, target, self.q, self.hand_cmd)
+        others = [t for t in self.last_perception.targets if t.name != target.name] if self.last_perception else []
+        return PickPlaceSkill(self.ik, side, target, self.q, self.hand_cmd, obstacles=others)
 
     # ------------------------------------------------------------------ perception
     def perceive(self, obs: dict) -> PerceptionResult:
@@ -216,6 +230,16 @@ class TidyPlanner:
                 return False
         return True
 
+    def approach_clear(self, side: str, t: Target, targets: list[Target], margin: float = 0.005) -> bool:
+        """The hand at its pre-grasp and grasp poses keeps `margin` from every other object (IK + probes)."""
+        boxes = obstacle_boxes([o for o in targets if o.name != t.name])
+        if not boxes:
+            return True
+        p = grasp_plan(side, t)
+        pre = p.get("pre", p["grasp"] + np.array([*p["back"], 0.0]))
+        qs = [self.ik.solve(self.ik.q_home, {side: (pose, p["quat"])}, iters=200)[0] for pose in (pre, p["grasp"])]
+        return min_clearance(self.ik, qs, side, boxes, stride=1) >= margin
+
     # ------------------------------------------------------------------ decision
     def assign_hand(self, t: Target) -> str:
         """The hand whose ready pose is closest to the object takes it."""
@@ -237,7 +261,11 @@ class TidyPlanner:
         for side in order:
             if by_side[side]:
                 # outermost first: the back of the hand faces outwards, so taking the inner object first
-                # would wedge the hand between two objects
-                t = max(by_side[side], key=lambda t: abs(float(t.pos[1])))
+                # would wedge the hand between two objects; but an object whose grasp would brush a neighbour
+                # waits until that neighbour is gone (the easy ones first, as a person would)
+                if skills_mod.EXPERT_STYLE != "v1":
+                    t = max(by_side[side], key=lambda t: (self.approach_clear(side, t, cands), abs(float(t.pos[1]))))
+                else:
+                    t = max(by_side[side], key=lambda t: abs(float(t.pos[1])))
                 return side, t
         return None

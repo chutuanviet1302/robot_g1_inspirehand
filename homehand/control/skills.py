@@ -10,12 +10,15 @@ between thumb and fingers without being swept by the thumb; then fingers + thumb
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
 
+from homehand.control.clearance import MARGIN, min_clearance, obstacle_boxes
 from homehand.control.grasps import GRASPS, LYING_GRASP, RELAXED_HAND
+from homehand.control.human_motion import ASYM_PEAK, asym_min_jerk, fitts_time, preshape
 from homehand.control.ik import ArmIK
 from homehand.control.safety import ARM_MAX_VEL
 from homehand.env.kitchen_env import BIN_WALL_TOP, BIN_XY, TABLE_Z
@@ -30,6 +33,11 @@ DROP_OFFSET_Y = 0.07        # each hand drops into its own half of the bin
 DROP_CLEARANCE = 0.045      # object bottom above the bin rim at release (fingers stay clear of the rim)
 SAFE_Z = 1.10               # palm height for lateral moves while carrying: a held object clears the tallest one
 KEEP_YAW = True
+# "human": consecutive primitives of one reach / carry are blended into a single movement (no stop at the via
+# poses), reach-to-grasp has a skewed speed profile and the hand pre-shapes on the way (human_motion.py);
+# "v1": every primitive starts and stops at rest and the hand changes shape with it (the expert until 2026-10)
+EXPERT_STYLE = os.environ.get("HOMEHAND_EXPERT_STYLE", "human")
+BLEND_APPROACH = os.environ.get("HOMEHAND_BLEND_APPROACH", "0") == "1"   # blended into the final approach, the PD-tracked hand cut the corner and pushed tall objects (5 of 50 episodes)
 REACH_Z = 1.03              # palm height above the pre-grasp point (tallest object top: 0.99 m; higher is out of reach near the chest)
 
 
@@ -117,6 +125,7 @@ class Segment:
     via: Callable[[], list] | None = None   # intermediate palm positions passed without stopping
     joint_space: bool = False   # free-space move: interpolate joints between IK key poses (reach / return)
     final_q: Callable[[], np.ndarray] | None = None   # joint_space: end in this configuration
+    blend_next: bool = False    # continue into the next segment without stopping (EXPERT_STYLE human)
 
 
 TOP_APPROACH_H = 0.10      # the palm comes down vertically from this far above its grasp pose
@@ -223,8 +232,14 @@ def grasp_plan(side: str, target: Target) -> dict:
 class PickPlaceSkill:
     """Scripted expert for one pick-and-place. Call `act(obs)` every control step until `done`."""
 
-    def __init__(self, ik: ArmIK, side: str, target: Target, q_start: np.ndarray, hand_cmd: dict):
+    DROP_RAISE_STEP = 0.03      # m: the release point goes up by this much while the forearm would touch an object
+    DROP_RAISE_MAX = 0.09
+
+    def __init__(self, ik: ArmIK, side: str, target: Target, q_start: np.ndarray, hand_cmd: dict,
+                 obstacles: list | None = None):
         self.ik, self.side, self.target = ik, side, target
+        self.obstacles = obstacle_boxes(obstacles or []) if EXPERT_STYLE != "v1" else []
+        self.drop_raise = 0.0
         self.q = q_start.copy()
         self.hand_cmd = {s: np.asarray(v, float).copy() for s, v in hand_cmd.items()}
         self.status = "running"  # -> "placed" | "empty_grasp"
@@ -270,6 +285,10 @@ class PickPlaceSkill:
         # pass their via points on rounded corners (one fluid reach / carry / return motion instead of
         # stop-and-go), every move starts and ends with zero velocity and acceleration (minimum jerk).
         drop = p["drop"]
+
+        def drop_pose():
+            return drop + np.array([0.0, 0.0, self.drop_raise]), dq
+
         if p["approach"] == "top":
             pre = p["pre"]
             self.plan = [
@@ -277,14 +296,14 @@ class PickPlaceSkill:
                 # (the tilted fingers and the opposed thumb hang ~10 cm below the palm: swing over at TOP_SWING_Z so
                 # they clear the tallest neighbour, then come down vertically)
                 Segment("reach", fixed([pre[0], pre[1], max(pre[2], TOP_SWING_Z)]), open_, min_steps=20,
-                        joint_space=True),
-                Segment("descend", fixed(pre), open_, speed=0.25, min_steps=8),
+                        joint_space=True, blend_next=True),
+                Segment("descend", fixed(pre), open_, speed=0.25, min_steps=8, blend_next=BLEND_APPROACH),
                 Segment("approach", fixed(g), open_, speed=FINE_SPEED, min_steps=12, hold_steps=2),
                 Segment("grasp", fixed(g), closed, min_steps=18, hold_steps=6, on_end=check_grasp),
-                Segment("lift", fixed(high(g)), closed, speed=0.2, min_steps=14),
-                Segment("transport", fixed(drop, dq), closed, speed=0.3, min_steps=24, hold_steps=2,
+                Segment("lift", fixed(high(g)), closed, speed=0.2, min_steps=14, blend_next=True),
+                Segment("transport", drop_pose, closed, speed=0.3, min_steps=24, hold_steps=2,
                         via=lambda: [high(drop)], joint_space=True),
-                Segment("drop", fixed(drop, dq), open_, min_steps=6, hold_steps=6, on_end=placed),
+                Segment("drop", drop_pose, open_, min_steps=6, hold_steps=6, on_end=placed),
                 Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=20,
                         via=lambda: [drop + [0, 0, 0.08], [drop[0] - 0.06, drop[1], RETURN_Z], above_home],
                         joint_space=True, final_q=lambda: ik.q_home),
@@ -293,16 +312,17 @@ class PickPlaceSkill:
             return
         self.plan: list[Segment] = [
             # swing the arm (joint space) to above the pre-grasp point, then come down vertically behind the object
-            Segment("reach", fixed([*(g + back)[:2], REACH_Z]), open_, min_steps=20, joint_space=True),
-            Segment("descend", fixed(g + back), open_, speed=0.25, min_steps=8),
+            Segment("reach", fixed([*(g + back)[:2], REACH_Z]), open_, min_steps=20, joint_space=True,
+                    blend_next=True),
+            Segment("descend", fixed(g + back), open_, speed=0.25, min_steps=8, blend_next=BLEND_APPROACH),
             Segment("approach", fixed(g), open_, speed=FINE_SPEED, min_steps=10, hold_steps=2),
             Segment("grasp", fixed(g), closed, min_steps=15, hold_steps=5, on_end=check_grasp),
             # lift straight up (the object must not drag over the counter), then swing over to the bin and come
             # down above it: a joint-space move through the key poses, on the IK's well-conditioned branch
-            Segment("lift", fixed(high(g)), closed, speed=0.25, min_steps=12),
-            Segment("transport", fixed(drop, dq), closed, speed=0.3, min_steps=24, hold_steps=2,
+            Segment("lift", fixed(high(g)), closed, speed=0.25, min_steps=12, blend_next=True),
+            Segment("transport", drop_pose, closed, speed=0.3, min_steps=24, hold_steps=2,
                     via=lambda: [high(drop)], joint_space=True),
-            Segment("drop", fixed(drop, dq), open_, min_steps=6, hold_steps=6, on_end=placed),
+            Segment("drop", drop_pose, open_, min_steps=6, hold_steps=6, on_end=placed),
             # straight up out of the bin first, then a smooth arc back to the ready pose
             Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=20,
                     via=lambda: [drop + [0, 0, 0.08], [drop[0] - 0.06, drop[1], RETURN_Z], above_home], joint_space=True,
@@ -326,20 +346,74 @@ class PickPlaceSkill:
         return self.plan[0].name if self.plan else "done"
 
     def _start(self) -> None:
+        """Plan the next movement: the first segment plus every following one it blends into (EXPERT_STYLE
+        human), as one joint path with a single time profile."""
         if not self.plan:
             return
-        seg = self.plan[0]
-        self.start_pos, self.start_quat = self.ik.palm_pose(self.q, self.side)
-        goal, self.goal_quat = seg.goal()
+        group = [self.plan[0]]
+        if EXPERT_STYLE != "v1":
+            while group[-1].blend_next and len(group) < len(self.plan):
+                group.append(self.plan[len(group)])
+        q0 = self.q.copy()
+        start_palm = self.ik.palm_pose(q0, self.side)[0]
+        paths, costs, q = self._plan_group(group, q0)
+        if self.obstacles and any(s.name == "transport" for s in group):
+            # carrying to the bin: the forearm slopes down behind the hand; if it would touch an object left on
+            # the counter, release from higher up (as long as the arm still reaches the release point)
+            clear = min_clearance(self.ik, np.vstack(paths), self.side, self.obstacles)
+            while clear < MARGIN and self.drop_raise < self.DROP_RAISE_MAX - 1e-9:
+                self.drop_raise += self.DROP_RAISE_STEP
+                cand = self._plan_group(group, q0)
+                goal = group[-1].goal()[0]
+                err = float(np.linalg.norm(self.ik.palm_pose(cand[2], self.side)[0] - goal))
+                c2 = min_clearance(self.ik, np.vstack(cand[0]), self.side, self.obstacles)
+                if err > 0.01 or c2 <= clear:
+                    self.drop_raise -= self.DROP_RAISE_STEP
+                    break
+                paths, costs, q, clear = *cand, c2
+        self.q_path = np.vstack(paths)
+        cost = np.concatenate(costs)
+        self.u = np.r_[0.0, np.cumsum(cost)]
+        self.bounds = np.cumsum([c.sum() for c in costs])      # u at the end of each segment of the group
+        self.seg_lo = np.r_[0.0, self.bounds[:-1]]             # ... and at its start
+        self.group = group
+        reach_to_grasp = EXPERT_STYLE != "v1" and len(group) > 1 and group[0].name == "reach"
+        self.profile, peak = (asym_min_jerk, ASYM_PEAK) if reach_to_grasp else (min_jerk, MIN_JERK_PEAK)
+        self.n_steps = max(sum(s.min_steps for s in group), int(np.ceil(peak * self.u[-1] / spec.CONTROL_DT)))
+        if reach_to_grasp:
+            o = OBJECTS[self.target.name]
+            dist = float(np.linalg.norm(self.ik.palm_pose(q, self.side)[0] - start_palm))
+            self.n_steps = max(self.n_steps, int(np.ceil(fitts_time(dist, 2 * min(o.half_x, o.half_y))
+                                                         / spec.CONTROL_DT)))
+        self.preshape = reach_to_grasp
+        self.k = 0
+        self.hand_start = self.hand_cmd[self.side].copy()
+        self.seg_hand_start = [self.hand_start]
+        for seg in group[:-1]:
+            self.seg_hand_start.append(np.asarray(seg.hand, float) if seg.hand is not None else self.seg_hand_start[-1])
+
+    def _plan_group(self, group: list[Segment], q0: np.ndarray):
+        paths, costs, q = [], [], q0
+        for seg in group:
+            qp, cost = self._plan_segment(seg, q)
+            paths.append(qp if not paths else qp[1:])
+            costs.append(cost)
+            q = qp[-1]
+        return paths, costs, q
+
+    def _plan_segment(self, seg: Segment, q0: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Joint path of one segment from configuration q0, and the time-at-full-speed of each of its steps."""
+        start_pos, start_quat = self.ik.palm_pose(q0, self.side)
+        goal, goal_quat = seg.goal()
         via = [np.asarray(v, float) for v in seg.via()] if seg.via is not None else []
-        self.path = rounded_path([self.start_pos, *via, goal])
+        self.path = rounded_path([start_pos, *via, goal])
         seglen = np.linalg.norm(np.diff(self.path, axis=0), axis=1)
         self.arc = np.r_[0.0, np.cumsum(seglen)]
         # Joint-space plan: sample the palm path densely, solve IK for every sample, then time the motion.
         # Each sample gets the time its slowest constraint needs (palm speed, joint speed, wrist rotation), and
-        # a minimum-jerk profile runs over that cumulative "time-at-full-speed": smooth start / stop, no joint
+        # the time profile runs over that cumulative "time-at-full-speed": smooth start / stop, no joint
         # ever above JOINT_SPEED_FRAC of its limit, and no IK runs while the arm moves (no twitching).
-        angle = 2 * np.arccos(min(1.0, abs(float(np.dot(self.start_quat, self.goal_quat)))))
+        angle = 2 * np.arccos(min(1.0, abs(float(np.dot(start_quat, goal_quat)))))
         n = int(max(1, np.ceil(self.arc[-1] / PATH_STEP), np.ceil(angle / 0.05)))
         ss = np.linspace(0.0, 1.0, n + 1)[1:]
         # the palm finishes turning by the last via point: it then comes down onto the object (or into the
@@ -350,24 +424,19 @@ class PickPlaceSkill:
             turn_end = max(self.arc[i] / self.arc[-1], 0.2)
         idx = self.ik.arm_qadr[self.side]
         if seg.joint_space:
-            keys = [(np.asarray(v, float), self.goal_quat) for v in via] + [(np.asarray(goal, float), self.goal_quat)]
-            self.q_path = self.ik.plan_joint_path(self.q, self.side, keys,
-                                                  final_q=seg.final_q() if seg.final_q else None)
-            palms = np.array([self.ik.palm_pose(q, self.side)[0] for q in self.q_path])
+            keys = [(np.asarray(v, float), goal_quat) for v in via] + [(np.asarray(goal, float), goal_quat)]
+            q_path = self.ik.plan_joint_path(q0, self.side, keys, final_q=seg.final_q() if seg.final_q else None)
+            palms = np.array([self.ik.palm_pose(q, self.side)[0] for q in q_path])
             dp = np.linalg.norm(np.diff(palms, axis=0), axis=1)
-            n = len(dp)
-            turn = np.full(n, angle / n)
+            turn = np.full(len(dp), angle / max(len(dp), 1))
         else:
-            poses = [(self._path_point(x), slerp(self.start_quat, self.goal_quat, min(1.0, x / turn_end))) for x in ss]
-            self.q_path = self.ik.plan_path(self.q, self.side, poses)
+            poses = [(self._path_point(x), slerp(start_quat, goal_quat, min(1.0, x / turn_end))) for x in ss]
+            q_path = self.ik.plan_path(q0, self.side, poses)
             dp = np.diff(np.r_[0.0, ss]) * self.arc[-1]
             turn = np.where(ss <= turn_end + 1e-9, angle / max(1, int(np.sum(ss <= turn_end + 1e-9))), 0.0)
-        dq = np.abs(np.diff(self.q_path[:, idx], axis=0)).max(axis=1)
+        dq = np.abs(np.diff(q_path[:, idx], axis=0)).max(axis=1)
         cost = np.maximum.reduce([dp / seg.speed, dq / (JOINT_SPEED_FRAC * ARM_MAX_VEL), turn / WRIST_TURN_SPEED])
-        self.u = np.r_[0.0, np.cumsum(cost)]
-        self.n_steps = max(seg.min_steps, int(np.ceil(MIN_JERK_PEAK * self.u[-1] / spec.CONTROL_DT)))
-        self.k = 0
-        self.hand_start = self.hand_cmd[self.side].copy()
+        return q_path, cost
 
     def _joint_point(self, alpha: float) -> np.ndarray:
         u = alpha * self.u[-1]
@@ -385,12 +454,27 @@ class PickPlaceSkill:
         self._last_obs = obs
         self.steps += 1
         if self.plan:
-            seg = self.plan[0]
             self.k += 1
-            alpha = min_jerk(self.k / self.n_steps)
+            tau = self.k / self.n_steps
+            alpha = self.profile(tau)
             self.q = self._joint_point(alpha)
-            if seg.hand is not None:
-                self.hand_cmd[self.side] = self.hand_start + (np.asarray(seg.hand) - self.hand_start) * alpha
+            u = alpha * self.u[-1]
+            # segments of the group the arm has moved past are finished (their callbacks run on the way)
+            while len(self.group) > 1 and u >= self.bounds[0] - 1e-9:
+                done = self.group.pop(0)
+                self.bounds, self.seg_lo = self.bounds[1:], self.seg_lo[1:]
+                self.seg_hand_start.pop(0)
+                if done.on_end is not None:
+                    done.on_end()
+                self.plan.pop(0)
+            seg = self.plan[0]
+            if self.preshape:
+                self.hand_cmd[self.side] = preshape(tau, self.hand_start, self.group[-1].hand)
+            elif seg.hand is not None:
+                lo, hi = self.seg_lo[0], self.bounds[0]
+                beta = 1.0 if hi <= lo else min(max((u - lo) / (hi - lo), 0.0), 1.0)
+                h0 = self.seg_hand_start[0]
+                self.hand_cmd[self.side] = h0 + (np.asarray(seg.hand) - h0) * beta
             if self.k >= self.n_steps + seg.hold_steps:
                 if seg.on_end is not None:
                     seg.on_end()

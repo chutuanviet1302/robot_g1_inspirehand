@@ -35,6 +35,13 @@ def fingertip_sites(side: str) -> list[str]:
     return [PREFIX[side] + f for f in ("thumb_tip", "index_tip", "middle_tip", "ring_tip", "pinky_tip")]
 
 
+def wrist_camera(side: str) -> str:
+    return PREFIX[side] + "wrist_cam"
+
+
+CAMERAS_VLA = ("head", "L_wrist_cam", "R_wrist_cam")   # image inputs of the vision-language-action policy
+
+
 def hand_root(side: str) -> str:
     return PREFIX[side] + "hand_root"
 

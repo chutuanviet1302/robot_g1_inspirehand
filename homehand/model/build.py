@@ -156,6 +156,8 @@ def build(out_dir=None, source: str = "auto") -> None:
             if name == f"{pre}hand_base_link":
                 ET.SubElement(b, "site", name=spec.palm_site(side), size="0.008", rgba="0 1 0 1", group="4",
                               **PALM_SITE[side])
+                from homehand.model.build_repo import wrist_camera_attrs
+                ET.SubElement(b, "camera", name=spec.wrist_camera(side), **wrist_camera_attrs(PALM_SITE[side]))
         wrist = bodies[f"{side}_wrist_yaw_link"]
         for g in list(wrist.findall("geom")):
             if g.get("mesh") == f"{side}_rubber_hand":

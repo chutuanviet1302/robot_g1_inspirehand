@@ -179,6 +179,43 @@ def test_dataset_merge_and_load(tmp_path, monkeypatch):
     assert min(m["stats"]["obs_std"]) >= record.STD_FLOOR
 
 
+def test_human_motion_profiles():
+    """Reach-to-grasp profile: rest at both ends, single speed peak at 40 %; hand pre-shaped by 65 % of the reach."""
+    from homehand.control.human_motion import APERTURE_PEAK, ASYM_PEAK, asym_min_jerk, fitts_time, preshape
+    tau = np.linspace(0, 1, 2001)
+    s = np.array([asym_min_jerk(x) for x in tau])
+    v = np.gradient(s, tau)
+    assert s[0] == 0 and s[-1] == pytest.approx(1.0) and np.all(np.diff(s) >= -1e-12)
+    assert v[0] < 1e-3 and v[-1] < 1e-3
+    assert tau[np.argmax(v)] == pytest.approx(0.4, abs=0.01) and v.max() == pytest.approx(ASYM_PEAK, rel=1e-2)
+    assert fitts_time(0.4, 0.05) > fitts_time(0.2, 0.05) > fitts_time(0.2, 0.1)
+    start, shaped = np.zeros(6), np.ones(6)
+    assert np.allclose(preshape(APERTURE_PEAK, start, shaped), shaped)
+    assert np.all(preshape(0.3, start, shaped)[1:] < 1) and preshape(0.3, start, shaped)[0] > preshape(0.3, start, shaped)[1]
+
+
+def test_clearance_detects_neighbour():
+    """The arm probes report contact with a box under them and clearance from a far one."""
+    from homehand.control.clearance import box_distance, obstacle_boxes
+    from homehand.control.skills import Target
+    box = obstacle_boxes([Target("sugar_box", np.array([0.3, 0.13, 0.8]), 0.0, 0.175)])[0]
+    assert box_distance(np.array([0.3, 0.13, 0.9]), box) < 0                      # inside
+    assert box_distance(np.array([0.3, 0.13, 0.8 + 0.175 + 0.05]), box) == pytest.approx(0.05, abs=1e-6)
+
+
+def test_wrist_cameras_look_along_the_fingers():
+    import mujoco
+    from homehand.model import spec
+    m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    for side in spec.SIDES:
+        cam = m.camera(spec.wrist_camera(side)).id
+        look = -d.cam_xmat[cam].reshape(3, 3)[:, 2]
+        palm = d.site_xmat[m.site(spec.palm_site(side)).id].reshape(3, 3)
+        assert look @ palm[:, 0] > np.cos(np.radians(40)) and look @ palm[:, 2] < 0   # along the fingers, tilted down
+
+
 def test_inspire_bridge_mapping():
     """Sim joint targets -> RH56DFX normalised commands: order, open/closed ends, inverse, rate limit, NaN hold."""
     from homehand.control.inspire_real import REAL_ORDER, SIM_RANGE, InspireBridge
