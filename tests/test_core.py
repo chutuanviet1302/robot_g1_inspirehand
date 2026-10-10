@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import numpy as np
 import pytest
@@ -154,6 +155,85 @@ def test_reset_layout_is_collision_free():
     assert n_lying > 0
 
 
+def test_dataset_merge_and_load(tmp_path, monkeypatch):
+    """Shards of kept demos -> data.npz + meta.json in the format the trainer reads."""
+    from homehand.data import record
+    from homehand.policy.features import ACT_DIM, OBS_DIM
+    monkeypatch.setattr(paths, "DATASET_DIR", tmp_path)
+    shards = tmp_path / "t" / "shards"
+    shards.mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    np.savez(shards / "seed00000.npz", n=np.array(2),
+             obs0=rng.normal(size=(5, OBS_DIM)).astype(np.float32), act0=rng.normal(size=(5, ACT_DIM)).astype(np.float32),
+             side0=np.array("left"), object0=np.array("soup_can"),
+             obs1=rng.normal(size=(3, OBS_DIM)).astype(np.float32), act1=rng.normal(size=(3, ACT_DIM)).astype(np.float32),
+             side1=np.array("right"), object1=np.array("mustard"))
+    np.savez(shards / "seed00001.npz", n=np.array(0))
+    meta = record.merge("t", sorted(shards.glob("*.npz")))
+    (tmp_path / "t" / "meta.json").write_text(__import__("json").dumps(meta))
+    data, m = record.load("t")
+    assert m["n_demos"] == 2 and m["n_frames"] == 8 and m["n_tidy_episodes"] == 2
+    assert m["per_side"] == {"left": 1, "right": 1} and m["demo_length"]["max"] == 5
+    assert data["obs"].shape == (8, OBS_DIM) and data["action"].shape == (8, ACT_DIM)
+    assert list(data["episode_index"]) == [0] * 5 + [1] * 3
+    assert min(m["stats"]["obs_std"]) >= record.STD_FLOOR
+
+
+def test_human_motion_profiles():
+    """Reach-to-grasp profile: rest at both ends, single speed peak at 40 %; hand pre-shaped by 65 % of the reach."""
+    from homehand.control.human_motion import APERTURE_PEAK, ASYM_PEAK, asym_min_jerk, fitts_time, preshape
+    tau = np.linspace(0, 1, 2001)
+    s = np.array([asym_min_jerk(x) for x in tau])
+    v = np.gradient(s, tau)
+    assert s[0] == 0 and s[-1] == pytest.approx(1.0) and np.all(np.diff(s) >= -1e-12)
+    assert v[0] < 1e-3 and v[-1] < 1e-3
+    assert tau[np.argmax(v)] == pytest.approx(0.4, abs=0.01) and v.max() == pytest.approx(ASYM_PEAK, rel=1e-2)
+    assert fitts_time(0.4, 0.05) > fitts_time(0.2, 0.05) > fitts_time(0.2, 0.1)
+    start, shaped = np.zeros(6), np.ones(6)
+    assert np.allclose(preshape(APERTURE_PEAK, start, shaped), shaped)
+    assert np.all(preshape(0.3, start, shaped)[1:] < 1) and preshape(0.3, start, shaped)[0] > preshape(0.3, start, shaped)[1]
+
+
+def test_clearance_detects_neighbour():
+    """The arm probes report contact with a box under them and clearance from a far one."""
+    from homehand.control.clearance import box_distance, obstacle_boxes
+    from homehand.control.skills import Target
+    box = obstacle_boxes([Target("sugar_box", np.array([0.3, 0.13, 0.8]), 0.0, 0.175)])[0]
+    assert box_distance(np.array([0.3, 0.13, 0.9]), box) < 0                      # inside
+    assert box_distance(np.array([0.3, 0.13, 0.8 + 0.175 + 0.05]), box) == pytest.approx(0.05, abs=1e-6)
+
+
+def test_wrist_cameras_look_along_the_fingers():
+    import mujoco
+    from homehand.model import spec
+    m = mujoco.MjModel.from_xml_path(str(paths.SCENE_XML))
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    for side in spec.SIDES:
+        cam = m.camera(spec.wrist_camera(side)).id
+        look = -d.cam_xmat[cam].reshape(3, 3)[:, 2]
+        palm = d.site_xmat[m.site(spec.palm_site(side)).id].reshape(3, 3)
+        assert look @ palm[:, 0] > np.cos(np.radians(40)) and look @ palm[:, 2] < 0   # along the fingers, tilted down
+
+
+def test_inspire_bridge_mapping():
+    """Sim joint targets -> RH56DFX normalised commands: order, open/closed ends, inverse, rate limit, NaN hold."""
+    from homehand.control.inspire_real import REAL_ORDER, SIM_RANGE, InspireBridge
+    b = InspireBridge()
+    assert np.allclose(b.to_real(np.zeros(6)), 1.0)                       # sim open -> real 1
+    b.last = None
+    assert np.allclose(b.to_real(SIM_RANGE), 0.0)                         # sim closed -> real 0
+    b.last = None
+    q = np.array([0.0, 0.0, 1.47, 0.0, 0.0, 0.0])                         # only the index closed
+    r = b.to_real(q)
+    assert r[REAL_ORDER.index("index")] == 0.0 and np.allclose(np.delete(r, REAL_ORDER.index("index")), 1.0)
+    assert np.allclose(b.to_sim(r), q)
+    nxt = b.to_real(np.zeros(6))                                          # one control step later: rate-limited
+    assert np.max(np.abs(nxt - r)) <= 3.0 / SIM_RANGE.max() * b.dt + 1e-9
+    assert np.allclose(b.to_real([np.nan] * 6), nxt)                      # non-finite -> hold the last command
+    assert b.force_registers().max() <= 1000
+
+
 @pytest.mark.slow
 def test_expert_picks_soup_can():
     from homehand.control.planner import TidyPlanner
@@ -192,7 +272,7 @@ def test_perception_localizes_objects():
 
 
 def test_api_smoke():
-    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ.setdefault("MUJOCO_GL", "egl" if sys.platform.startswith("linux") else "glfw")
     from fastapi.testclient import TestClient
 
     from homehand.server.app import create_app
@@ -202,3 +282,6 @@ def test_api_smoke():
     assert len(cfg["objects"]) == 4
     assert client.get("/api/runs").status_code == 200
     assert "ram_available_mb" in client.get("/api/system").json()
+    # the UI's module scripts must be served as JavaScript (Windows registry MIME types say text/plain)
+    for js in (paths.WEB_DIST_DIR / "assets").glob("*.js"):
+        assert "javascript" in client.get(f"/assets/{js.name}").headers["content-type"]

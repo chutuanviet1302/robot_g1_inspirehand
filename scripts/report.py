@@ -23,13 +23,14 @@ def pct(w):
 def main():
     runs = [r for r in store.list_runs() if r["status"] == "done" and r["summary"]]
     runs.sort(key=lambda r: r["id"])
+    n_rand = sorted({r["summary"]["n_episodes"] for r in runs if r["randomization"] != "nominal"})
     lines = ["# Results", "",
              "Measured on the development laptop (i5-11400H, GTX 1650 4 GB, 16 GB RAM) with `homehand eval` (seeds 0..n-1,",
              "4 objects per episode). Intervals are 95 % Wilson score intervals. *Task success* = every object of the",
              "episode ended in the bin; *objects cleared* = fraction of all objects that ended in the bin.",
-             "Randomised runs use only 10 episodes each, so their intervals overlap heavily (e.g. `high` scoring above",
-             "`medium` is sampling noise); the one-factor table further down is the clearer sim-gap measurement.",
-             "Runs made before the mass-randomisation fix (stale `mj_setConst`) are excluded.", ""]
+             f"Randomised runs use {'/'.join(map(str, n_rand)) or '-'} episodes each, so neighbouring levels have overlapping",
+             "intervals; the one-factor table further down is the clearer sim-gap measurement.",
+             "Reproduce everything with `python scripts/run_all.py`.", ""]
     lines += ["## Controllers × sim-gap level", "",
               "| run | controller | perception | randomisation | episodes | task success | objects cleared | protective stops |",
               "|---|---|---|---|---|---|---|---|"]
@@ -68,6 +69,24 @@ def main():
                   "|---|---|---|---|---|---|---|---|",
                   f"| {q['episodes']} | {q['clean']} | {q['objects_cleared']} | {q['safety_stops']} | {q['mean_seconds']} s | "
                   f"{q['rms_joint_acc']} rad/s² | {q['rms_joint_jerk']} rad/s³ | {q['max_penetration_mm']} mm |"]
+    hl = {s: paths.DATA_DIR / f"human_likeness_{s}.json" for s in ("v1", "human")}
+    if all(p.exists() for p in hl.values()):
+        lines += ["", "## Human-likeness of the motion (expert v1 vs v2, ground-truth poses)", "",
+                  "`python scripts/human_likeness.py --style v1|human --seeds 0-49`: kinematic markers of every reach (start of",
+                  "the reach to the start of the grasp) and carry (lift + transport) from the palm trajectory, low-passed",
+                  "as in human motion-capture studies. Human reference values: Flash & Hogan 1985, Marteniuk et al. 1987,",
+                  "Jeannerod 1984, Balasubramanian et al. 2015 (SPARC).", "",
+                  "| | human | v1 | v2 (human-like) |", "|---|---|---|---|"]
+        hs = {s: json.loads(p.read_text())["summary"] for s, p in hl.items()}
+        lines.append(f"| objects in the bin | | {hs['v1']['objects']} | {hs['human']['objects']} |")
+        lines.append(f"| clean episodes | | {hs['v1']['clean']}/{hs['v1']['episodes']} | {hs['human']['clean']}/{hs['human']['episodes']} |")
+        ref = {"stops": "0", "time_to_peak": "0.35–0.45", "sparc": "−1.4…−1.8", "straightness": "1.0–1.2",
+               "peak_aperture_time": "0.6–0.7", "duration_s": "~1 s"}
+        for kind in ("reach", "carry"):
+            for key in ("duration_s", "stops", "time_to_peak", "sparc", "straightness", "peak_aperture_time"):
+                if key in hs["v1"].get(kind, {}):
+                    lines.append(f"| {kind}: {key.replace('_', ' ')} | {ref[key]} | {hs['v1'][kind][key]} | "
+                                 f"{hs['human'][kind][key]} |")
     ab = paths.DATA_DIR / "simgap_ablation.json"
     if ab.exists():
         t = json.loads(ab.read_text())["table"]
@@ -105,7 +124,7 @@ def main():
             for b in json.loads((det / "bench.json").read_text()).values():
                 lines.append(f"| {b['detector']} | {100 * b['recall']:.1f}% | {b['pos_err_mean_mm']} mm | {b['pos_err_p90_mm']} mm | "
                              f"{b['yaw_err_mean_deg']}° | {100 * b.get('rest_pose_accuracy', 1.0):.0f}% | {b['detect_ms']} ms |")
-    (ROOT / "RESULTS.md").write_text("\n".join(lines) + "\n")
+    (ROOT / "RESULTS.md").write_text("\n".join(lines) + "\n", encoding="utf-8")   # (Windows default: cp1252)
     print(f"wrote {ROOT / 'RESULTS.md'}")
 
 

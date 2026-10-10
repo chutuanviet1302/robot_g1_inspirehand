@@ -31,7 +31,7 @@ FACTORS = {
 
 def run(args) -> dict:
     name, seed = args
-    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ.setdefault("MUJOCO_GL", "egl" if sys.platform.startswith("linux") else "glfw")
     from homehand.control.planner import TidyPlanner
     from homehand.env.kitchen_env import KitchenEnv
     from homehand.runner import run_episode

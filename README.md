@@ -8,8 +8,8 @@ hands alternate, each object gets **its own grasp type**, and the robot **drops*
 Everything — simulation, perception, planning, three controllers (scripted expert, **ACT**, **Diffusion
 Policy**), a **safety layer**, a sim-gap evaluation with Wilson confidence intervals and a failure taxonomy —
 is served by one command as a web app. It runs on a laptop (i5-11400H, GTX 1650 4 GB, 16 GB RAM) on Ubuntu,
-or in Docker; the code is path- and process-portable to Windows (CI is configured for it) but has not been run
-on a Windows machine yet.
+on **Windows 11** (native, Python 3.12: tests, viewer, web app and the whole training / evaluation pipeline),
+or in Docker.
 
 Demo video: [media/demo_seed8.mp4](media/demo_seed8.mp4) — one full episode in real time, YOLO perception, two of the four objects lying on their side (taken from above), each drop on a different spot.
 
@@ -39,14 +39,24 @@ homehand serve                                            # opens http://127.0.0
 GPU (optional, for training): `pip install torch --index-url https://download.pytorch.org/whl/cu121` before the
 line above. Without a GPU everything still runs; training uses the CPU.
 
+**Windows notes.** Use PowerShell (`.venv\Scripts\activate`) and Git for Windows (needed by `fetch-assets`).
+Rendering uses WGL/GLFW, no extra setup. If `pip install torch` fails with *"file is being used by another
+process"* (antivirus scanning the 2.4 GB wheel), download it first and install from the file:
+`pip download --no-deps -d wheels torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121` then
+`pip install wheels\torch-*.whl`. On a flaky connection clone large repos with `git -c http.version=HTTP/1.1`.
+
 The web UI is pre-built into `homehand/web_static`, so Node.js is only needed to change the frontend
 (`cd web && npm install && npm run build`).
 
-Train and evaluate everything (≈2 h on the laptop above; stages run one after another so RAM/VRAM stay bounded):
+Train and evaluate everything (≈11 h on the laptop above; stages run one after another so RAM/VRAM stay bounded):
 
 ```bash
 homehand pipeline     # demos -> YOLO data -> YOLO -> ACT -> Diffusion Policy -> evaluations
+python scripts/run_all.py   # the pipeline + grasp benchmark + motion quality + sim-gap ablation -> RESULTS.md
 ```
+
+Both are resumable: rerun the same command after an interruption and finished stages are skipped
+(training restarts from its last checkpoint).
 
 or step by step:
 
@@ -166,6 +176,30 @@ Contact geometry: the palm collides with the convex hull of its own visual mesh 
 to 5 mm inside the rendered palm), so what you see never sinks into an object or the bin (measured worst case
 over 24 episodes: 1 mm, fingers included).
 
+**Human-like motion** (`homehand/control/human_motion.py`, `clearance.py`; expert v2, `HOMEHAND_EXPERT_STYLE=v1`
+restores the previous one). Principles from human motor control, measured with `scripts/human_likeness.py`:
+
+* the primitives of one reach (swing over + come down behind the object) and of one carry (lift + transport) are
+  blended into **one movement** with a single speed profile, instead of stopping at every via pose; the slow
+  final approach onto the object stays a separate movement (blended into it, the PD-tracked hand cut the corner
+  and pushed tall objects);
+* reach-to-grasp uses a **skewed bell-shaped speed profile** (v ~ t²(1−t)³: peak at 40 %, long deceleration
+  towards the object, Marteniuk 1987) with a **Fitts' law** lower bound on its duration;
+* the hand **pre-shapes during the reach** (thumb first, fully open just before the final approach) instead of
+  opening in one go (Jeannerod 1984);
+* **clearance to the other objects**: a failure analysis of 50 episodes showed that 8 of 11 lost objects were
+  *not* the one being picked (the forearm, sloping down behind the hand over the bin, touched the top of a tall box
+  in the inner slot; fingertips brushed neighbours). The arm is checked as probe spheres against the other
+  objects' boxes: the release point goes up while the carry would touch one, and an object whose grasp would
+  brush a neighbour waits until the neighbour is gone (the easy ones first).
+
+**Vision-language-action policy** (`homehand/data/record_vla.py`, `export_lerobot.py`, `policy/smolvla_skill.py`,
+`kaggle/`). Eye-in-hand cameras on both hands + the head camera (256×256), the 26 joint positions and an instruction
+("pick up the mustard bottle with the left hand and put it in the bin", four phrasings + one held out for testing)
+are recorded for every successful pick of the expert and exported as a LeRobotDataset; **SmolVLA** is fine-tuned on
+Kaggle (free T4, see `kaggle/README.md`) and runs as the skill inside the same planner and safety layer
+(`scripts/eval_smolvla.py`). The planner stays the high level (which object, which hand); the VLA does the skill.
+
 **Learning** (`homehand/policy`). Every successful skill execution of the expert inside full tidy episodes is
 a demonstration (features: active arm + hand joints, palm position, perceived object pose, grasp type, side,
 progress → 13 joint targets). **ACT** (CVAE + transformer, chunk 25, temporal ensembling) and **Diffusion
@@ -180,6 +214,11 @@ triggers a protective stop (the robot holds still, the episode is labelled `safe
 the same limits, so the expert's commands are never clipped. Actuator torque limits come from the model (G1
 arm 25 N·m, wrist 5 N·m, Inspire fingers 2 N·m).
 
+**Towards the real hand** (`homehand/control/inspire_real.py`). The simulated hand commands are converted
+to the RH56DFX interface of Unitree's `dfx_inspire_service` (six normalised targets, 1 = open, order pinky →
+thumb rotation, angle registers 0-1000, per-finger force limit ≤ 9.8 N), rate-limited like the safety layer,
+with a hold on non-finite commands and a per-channel calibration hook. Not validated on hardware.
+
 **Sim-gap evaluation** (`homehand/eval`). No real robot, so the gap is estimated by perturbing what the
 simulator assumes: friction, object mass, perception noise, action latency and finger stiffness at four levels
 (`nominal`, `low`, `medium`, `high`). Each run reports task success (all objects in the bin) and the
@@ -192,25 +231,39 @@ reserve) and the pipeline runs GPU stages one at a time.
 
 ## Results
 
-Full tables in [RESULTS.md](RESULTS.md) (generated by `python scripts/report.py`). Headline numbers, 4 objects
-per episode, YOLO perception unless stated:
+Full tables in [RESULTS.md](RESULTS.md) (all regenerated on Windows 11 with `python scripts/run_all.py`).
+Headline numbers, 4 objects per episode (about half of the outer ones lying on their side), YOLO perception
+unless stated, 95 % Wilson intervals:
 
 | | clean episodes | objects in the bin | protective stops |
 |---|---|---|---|
-| scripted expert, nominal (20 ep.) | 90 % | 98 % | 0 |
-| scripted expert, oracle masks (20 ep.) | 80 % | 95 % | 0 |
-| ACT, nominal (20 ep.) | 70 % | 90 % | 0 |
-| Diffusion Policy, 30 k steps, 30 DDIM steps, nominal (20 ep.) | 45 % | 78 % | 0 |
-| expert, single-object grasp benchmark (192 trials) | – | 98 % | – |
+| scripted expert, nominal (50 ep.) | 66 % [52–78] | 87 % [82–91] | 1 |
+| scripted expert, oracle masks (50 ep.) | 76 % [63–86] | 92 % [88–95] | 1 |
+| ACT, 25 k steps, nominal (50 ep.) | 64 % [50–76] | 86 % [80–90] | 0 |
+| Diffusion Policy, 30 k steps, 30 DDIM steps, nominal (50 ep.) | 30 % [19–44] | 70 % [63–76] | 5 |
+| expert, single-object grasp benchmark (144 trials, upright + lying) | – | 99 % (143/144) | – |
 
-* **Motion**: minimum-jerk, joint-space planned motions: RMS arm joint acceleration 2.7 rad/s² (9.5 with the
-  previous way-point interpolation), no protective stop in 24 episodes, deepest robot–object/bin overlap 0.9 mm.
-* **Sim gap**: one factor at a time at the `high` extreme, the expert depends most on **finger–object friction**
-  (×0.5: 27/32 objects vs 31/32 nominal); doubling the object mass or adding 120 ms latency barely matters.
-* **ACT vs Diffusion Policy** on the same 846 demonstrations: ACT reaches 92 % of the expert's object rate after
-  10 k steps (24 min on the GTX 1650). Diffusion Policy needs far more: after 10 k steps it cleared 1 % of the
-  objects with the default 10 DDIM steps (30 % with 30 steps, which halved the action error); continued to 30 k
-  steps (+67 min) it reaches 78 % (85 % of the expert), still mostly losing objects by knocking them over.
+* **Lying objects make the task harder**: the earlier upright-only setup reached 90 % clean / 98 % of the
+  objects; with top grasps of lying objects added, the expert's losses are mostly knocked-over and dropped
+  objects in the full scene, while every grasp works in isolation (143/144).
+* **ACT matches the expert** on the same 870 demonstrations (86 % vs 87 % of the objects at nominal, and within
+  the confidence intervals at every sim-gap level: 90–93 % vs 86–88 %). **Diffusion Policy** stays well below
+  (62–70 %) and is the only controller with a noticeable number of protective stops (force > 80 N against the
+  counter or bin, stopped correctly by the safety layer).
+* **Motion**: minimum-jerk, joint-space planned motions: RMS arm joint acceleration 2.0 rad/s², no protective
+  stop in 24 ground-truth episodes, deepest robot–object/bin overlap 2 mm (the wrist against a carried box).
+* **Sim gap**: one factor at a time at the `high` extreme (16 episodes each), the expert depends most on
+  **finger–object friction** (×0.5: 52/64 objects vs 61/64 nominal, mostly knocked over), then on **pose noise**
+  (12 mm: 56/64) and **finger stiffness** (×0.6: 58/64); 120 ms of latency changes nothing.
+* **Human-like motion (expert v2)**: same success as v1 (YOLO, 50 ep.: 174/200 objects for both; ground truth:
+  186 vs 185/200) with 4 of 5 kinematic markers now in the human range — no stop while carrying (v1: 1), carry
+  SPARC −1.67 (v1 −2.27), reach speed peak at 34 % of the movement, hand fully open at 62 % of the reach. Still
+  unlike a person: ~4× slower (joint speed limits) and a high, curved path around the other objects.
+* **SmolVLA** (images + language + joints, 3 k fine-tuning steps on a Kaggle T4 = ~0.4 epoch of 320 demos):
+  2/40 objects, 0/10 clean episodes, 3 protective stops (pressing on the counter, stopped by the safety layer);
+  with an instruction phrasing never seen in training 3/20 objects — the language conditioning does not break.
+  The pipeline runs end to end; the policy is far from trained (SmolVLA fine-tunes usually take ≥ 20 k steps).
+  On the T4 the VLM had to be loaded in float32 + AMP instead of bfloat16 (no bf16 hardware: > 7 s/step → 1.4 s/step).
 * **Found on the way**: the mass randomisation changed `body_mass` without `mj_setConst`, so a +20 % mass made
   grasped objects slip and the simulation diverge — earlier sim-gap numbers measured that bug. Fixed and covered
   by a regression test.

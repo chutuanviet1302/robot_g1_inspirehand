@@ -20,6 +20,14 @@ from pydantic import BaseModel
 from homehand import paths
 from homehand.env.randomize import PRESETS
 
+# Windows takes MIME types from the registry, where .js is often text/plain: browsers then refuse the UI's
+# module scripts and the page stays blank.
+import mimetypes
+
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("image/svg+xml", ".svg")
+
 
 class RunConfig(BaseModel):
     controller: str = "expert"

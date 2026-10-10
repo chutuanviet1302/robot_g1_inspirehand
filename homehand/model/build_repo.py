@@ -37,6 +37,43 @@ COLLISION = dict(group="3", contype="2", conaffinity="1", condim="4", friction="
                  solref="0.004 1", solimp="0.95 0.99 0.001", priority="1")
 
 
+WRIST_CAM_OFFSET = (-0.10, 0.0, 0.09)    # in the palm-site frame (x along the fingers, z up the thumb side)
+WRIST_CAM_PITCH = 32.0                     # deg, looking down past the fingers
+WRIST_CAM_FOVY = 90.0
+
+
+def _qmul(a, b):
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b
+    return [w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2, w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2]
+
+
+def _qrotate(q, v):
+    w, x, y, z = q
+    r = [[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+         [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+         [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]]
+    return [sum(r[i][k] * v[k] for k in range(3)) for i in range(3)]
+
+
+def wrist_camera_attrs(palm_site: dict) -> dict:
+    """<camera> attributes in the hand base frame: behind and above the palm, looking along the fingers and
+    `WRIST_CAM_PITCH` down (an eye-in-hand camera, as mounted on real Inspire hands for teleoperation)."""
+    import math
+    ps = [float(v) for v in palm_site["pos"].split()]
+    qs = [float(v) for v in palm_site["quat"].split()]
+    # camera axes in the palm-site frame: x = -y_site, looking along +x_site tilted down -> rotation about -y
+    a = math.radians(WRIST_CAM_PITCH)
+    base = [-0.5, -0.5, 0.5, 0.5]          # camera x = -y, image up = +z: looks along +x
+    tilt = [math.cos(a / 2), 0.0, math.sin(a / 2), 0.0]    # about the site y axis: nose down
+    q = _qmul(qs, _qmul(tilt, base))
+    off = _qrotate(qs, list(WRIST_CAM_OFFSET))
+    pos = [ps[i] + off[i] for i in range(3)]
+    return {"pos": " ".join(f"{v:.5g}" for v in pos), "quat": " ".join(f"{v:.6g}" for v in q),
+            "fovy": f"{WRIST_CAM_FOVY:g}"}
+
+
 def _iter_with_parent(elem: ET.Element):
     for child in list(elem):
         yield elem, child
@@ -176,6 +213,8 @@ def build_from_repo(out_dir: Path | None = None) -> None:
         urdf = parse_urdf(paths.INSPIRE_DIR / f"inspire_hand_{side}.urdf")
         ET.SubElement(bodies[f"{pre}hand_base_link"], "site", name=spec.palm_site(side), size="0.008",
                       rgba="0 1 0 1", group="4", **PALM_SITE[side])
+        ET.SubElement(bodies[f"{pre}hand_base_link"], "camera", name=spec.wrist_camera(side),
+                      **wrist_camera_attrs(PALM_SITE[side]))
         for j in urdf.joints:
             if j.child.endswith("_tip"):
                 ET.SubElement(bodies[pre + j.parent], "site", name=pre + j.child, size="0.006", rgba="1 0.5 0 1",
