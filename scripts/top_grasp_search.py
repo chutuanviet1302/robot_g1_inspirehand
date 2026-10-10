@@ -45,7 +45,7 @@ def hand_quat(side: str, yaw: float, tilt: float) -> np.ndarray:
 
 
 def _init():
-    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ.setdefault("MUJOCO_GL", "egl" if sys.platform.startswith("linux") else "glfw")
     from homehand.control.ik import ArmIK
     from homehand.env.kitchen_env import KitchenEnv
     _W["env"], _W["ik"] = KitchenEnv(), ArmIK()

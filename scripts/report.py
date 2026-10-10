@@ -23,13 +23,14 @@ def pct(w):
 def main():
     runs = [r for r in store.list_runs() if r["status"] == "done" and r["summary"]]
     runs.sort(key=lambda r: r["id"])
+    n_rand = sorted({r["summary"]["n_episodes"] for r in runs if r["randomization"] != "nominal"})
     lines = ["# Results", "",
              "Measured on the development laptop (i5-11400H, GTX 1650 4 GB, 16 GB RAM) with `homehand eval` (seeds 0..n-1,",
              "4 objects per episode). Intervals are 95 % Wilson score intervals. *Task success* = every object of the",
              "episode ended in the bin; *objects cleared* = fraction of all objects that ended in the bin.",
-             "Randomised runs use only 10 episodes each, so their intervals overlap heavily (e.g. `high` scoring above",
-             "`medium` is sampling noise); the one-factor table further down is the clearer sim-gap measurement.",
-             "Runs made before the mass-randomisation fix (stale `mj_setConst`) are excluded.", ""]
+             f"Randomised runs use {'/'.join(map(str, n_rand)) or '-'} episodes each, so neighbouring levels have overlapping",
+             "intervals; the one-factor table further down is the clearer sim-gap measurement.",
+             "Reproduce everything with `python scripts/run_all.py`.", ""]
     lines += ["## Controllers × sim-gap level", "",
               "| run | controller | perception | randomisation | episodes | task success | objects cleared | protective stops |",
               "|---|---|---|---|---|---|---|---|"]
@@ -105,7 +106,7 @@ def main():
             for b in json.loads((det / "bench.json").read_text()).values():
                 lines.append(f"| {b['detector']} | {100 * b['recall']:.1f}% | {b['pos_err_mean_mm']} mm | {b['pos_err_p90_mm']} mm | "
                              f"{b['yaw_err_mean_deg']}° | {100 * b.get('rest_pose_accuracy', 1.0):.0f}% | {b['detect_ms']} ms |")
-    (ROOT / "RESULTS.md").write_text("\n".join(lines) + "\n")
+    (ROOT / "RESULTS.md").write_text("\n".join(lines) + "\n", encoding="utf-8")   # (Windows default: cp1252)
     print(f"wrote {ROOT / 'RESULTS.md'}")
 
 

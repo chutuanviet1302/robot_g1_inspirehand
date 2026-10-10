@@ -2,8 +2,8 @@
 __pycache__/
 *.egg-info/
 third_party/
-generated/
-data/
+/generated/
+/data/
 models/*
 !models/.gitkeep
 web/node_modules/

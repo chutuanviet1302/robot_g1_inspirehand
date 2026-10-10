@@ -71,7 +71,9 @@ def fetch_ycb(force: bool = False) -> None:
             tgz = Path(tmp) / "obj.tgz"
             for attempt in range(5):
                 try:
-                    urllib.request.urlretrieve(url, tgz)
+                    # (urlretrieve has no timeout: a stalled S3 connection hung the fetch forever)
+                    with urllib.request.urlopen(url, timeout=60) as r, open(tgz, "wb") as f:
+                        shutil.copyfileobj(r, f, 1 << 20)
                     break
                 except OSError as e:
                     if attempt == 4:

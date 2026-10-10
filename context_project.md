@@ -1,6 +1,6 @@
 # HomeHand — context & trạng thái dự án
 
-Cập nhật: 2026-10-09 (phiên 4). Thư mục: `/home/tuanviet2003/Downloads/Project_Robotics`.
+Cập nhật: 2026-10-09 (phiên 5, Windows — xem §4e). Thư mục Linux: `/home/tuanviet2003/Downloads/Project_Robotics`.
 Máy: i5-11400H (6C/12T), GTX 1650 4 GB, RAM 16 GB, Ubuntu (đích: chạy được cả Windows).
 
 ## 1. Dự án là gì
@@ -34,11 +34,11 @@ camera đầu RGB-D → YOLOv8n-seg → mask + depth → ước lượng 3-D (v�
 | `env/kitchen_env.py`, `randomize.py` | Môi trường, phân loại kết quả, 4 mức randomization (nominal/low/medium/high) |
 | `perception/` | Camera, detector (YOLO + oracle), định vị 3-D, sinh dữ liệu synthetic + train YOLO |
 | `policy/` | ACT, Diffusion Policy, train chung, chạy policy làm skill |
-| `data/record.py` | Thu demo từ expert (chỉ giữ lần gắp thành công) |
+| `data/record.py` (homehand/data) | Thu demo từ expert (chỉ giữ lần gắp thành công) |
 | `eval/` | Wilson CI, SQLite, chạy song song có giới hạn RAM |
 | `server/`, `web/` | API + WebSocket stream; React 4 tab (Live, Evaluation, Episodes, Models), build sẵn vào `homehand/web_static` |
 | `cli.py` | `homehand fetch-assets / build-model / view / demo / collect / train / eval / perception ... / pipeline / serve` |
-| `tests/test_core.py` | 10 test (đang pass) |
+| `tests/test_core.py` | 16 test (pass trên Windows) |
 | `.github/workflows/ci.yml` | CI Ubuntu + Windows |
 | `scripts/report.py` | Sinh `RESULTS.md` từ database |
 
@@ -126,37 +126,65 @@ offset vật trong tay đo thật để tính điểm thả).
   `python -c "import homehand.control.grasps"` trước khi chạy song song.
 - Viewer giờ in lý do dừng an toàn. 2 lần dừng an toàn thấy trong viewer (seed 23, 27) không tái hiện được khi chạy nền.
 
-## 5. Con số hiện tại (CŨ, trước phiên 2 — sim-gap trong đó bị bug khối lượng) (expert, oracle perception, nominal)
+## 4e. Phiên 2026-10-09 (phiên 5): chạy trên Windows 11 thật
 
-| Phép đo | Kết quả | Ghi chú |
-|---|---|---|
-| Gắp-thả 1 vật, vị trí gần giữa | 30/32 (94%) | model repo bạn, trước khi đổi bố trí |
-| Gắp-thả 1 vật, vị trí ngoài rìa (|y| 0.25–0.29) | 25/32 (78%) | |
-| Dọn cả bàn, 4 vật (bố trí hiện tại) | **6/30 episode sạch (20%)**, **74/120 vật vào thùng (62%)** | 0 lần dừng an toàn; lỗi: grasp_fail 7, dropped 8, misplaced 4, knocked_over 5 |
-| Dọn cả bàn, 3–4 vật đặt gần thân hơn (bố trí cũ) | 14/30 (47%) và 76% vật | bạn yêu cầu dời vật ra xa nên bỏ bố trí này |
+Máy: Windows 11, Python 3.12 (`.venv`), MuJoCo 3.15, torch 2.5.1+cu121, ultralytics 8.4, GTX 1650. Thư mục
+`D:\Program Files\Downloads\Vin Dynamics\g1_inspirehand\robot_g1_inspirehand`. `data/` và `models/` của máy Linux không
+có ở đây → chạy lại toàn bộ bằng `scripts/run_all.py`.
 
-Hộp thịt (nắm 3 ngón) yếu nhất, đặc biệt tay trái. **Chưa có số liệu nào của ACT, Diffusion Policy hay YOLO.**
+- **Lỗi repo nghiêm trọng:** `homehand/data/record.py` không có trong git vì `.gitignore` dòng `data/` bỏ qua cả
+  `homehand/data/` → `collect` / `train` / `pipeline` hỏng với bản đã push. Đã viết lại (shard theo seed để resume,
+  chỉ giữ lần gắp cuối cùng `placed` + vật kết thúc trong rổ, `meta.json` đúng định dạng web/report đọc) và đổi
+  `.gitignore` thành `/data/`, `/generated/`. Có test `test_dataset_merge_and_load`.
+- Lỗi Windows đã sửa: scripts + test đặt `MUJOCO_GL=egl` vô điều kiện (MuJoCo Windows báo lỗi) → chỉ trên Linux;
+  web app trang trắng vì Windows trả `.js` là `text/plain` (MIME từ registry) → `mimetypes.add_type` trong
+  `server/app.py` + test hồi quy; `fetch-assets` treo vô hạn (`urlretrieve` không timeout) → `urlopen(timeout=60)`.
+- Cài đặt Windows: torch wheel 2.4 GB bị khoá file (antivirus) → `pip download` rồi cài từ file; clone
+  `feraco/unitree_g1_inspire` bị đứt HTTP/2 → `git -c http.version=HTTP/1.1` + partial clone, bỏ `media/`.
+- **16/16 test pass trên Windows** (gồm render camera + test gắp đầy đủ). Viewer native chạy được: 28 episode
+  expert xem trực tiếp, đa số 4/4, 0 dừng an toàn.
+- Mới: `scripts/run_all.py` (pipeline + grasp-bench + motion quality + sim-gap ablation 16 seed/yếu tố + report,
+  resume được); `control/inspire_real.py` (lệnh sim → giao diện RH56DFX: [0,1] 1 = mở, thứ tự út → xoay ngón cái,
+  thanh ghi 0–1000, giới hạn lực ≤ 9.8 N, giới hạn tốc độ, giữ lệnh khi NaN, hook hiệu chuẩn; chưa thử tay thật).
+- Pipeline lần này: 870 demo / 324k khung; YOLO mAP50 0.995, sai số 3.5 mm, đứng/nằm 97.9%; ACT 25k bước (trước
+  10k), Diffusion 30k; sim-gap 25 ep/mức (trước 10).
+- Bài học: viewer `--loop` chạy song song lúc train làm ACT chậm ~7× (tranh GPU + RAM) → không mở viewer khi train.
 
-## 6. Trạng thái pipeline (2026-10-09, 11:30)
+## 5. Con số hiện tại (phiên 5, Windows, 2026-10-10 — chạy lại toàn bộ bằng `scripts/run_all.py`, ~11 giờ)
 
-Kết quả lần chạy trước (expert cũ, chưa có vật nằm) ở `data/archive/run1_2026-10-08/`. Lần này:
-- Đã xong: thu demo (862 demo), ảnh YOLO, YOLO (mAP50 0.995, đứng/nằm đúng 97.9%), benchmark, ACT (10k bước, val 0.0076).
-- **Máy khởi động lại 2 lần** (09:52 và ~11:10, đều là reboot có trật tự, không phải lỗi GPU) → mất tiến độ Diffusion.
-  Đã thêm **checkpoint huấn luyện** (`models/<tên>/training_state.pt` mỗi lần log, tự resume nếu cùng cấu hình).
-- **Lỗi policy đã sửa:** `PolicySkill` chạy cố định 532 bước/lần gắp → 4 vật vượt horizon. Giờ kết thúc khi tay về tư thế chờ
-  (≥ 60% độ dài demo trung bình). ACT sau sửa (YOLO, nominal 20 ep.): 15% sạch / 59% vật / 3 dừng an toàn (lực > 80 N ấn
-  bàn/rổ; lớp an toàn chặn đúng). Kém xa expert vì nhiệm vụ khó hơn (8 kiểu nắm, vật nằm) với cùng lượng dữ liệu.
-- Đang chạy (scripts trong `data/logs/`): `pipeline.sh` (Diffusion 30k bước, có checkpoint) → `act_v2.sh` (ACT +15k bước
-  từ v1 rồi đánh giá); `eval_act_rest.sh` (ACT medium/high); `eval_final.sh` (expert, Diffusion, expert+oracle, expert
-  sim-gap, rồi `scripts/report.py`). Nếu máy khởi động lại: chạy lại đúng các script này (đều bỏ qua phần đã xong / resume),
-  đánh dấu run DB còn `running` thành `aborted`.
+Chi tiết đầy đủ: `RESULTS.md`. YOLO perception trừ khi ghi khác, 4 vật/episode (~một nửa vật ô ngoài nằm), CI Wilson 95%.
+
+| Controller | nominal (50 ep.) sạch / vật | low / medium / high (25 ep.) vật | dừng an toàn (tổng) |
+|---|---|---|---|
+| Expert | 66% [52–78] / 87% [82–91] | 87% / 88% / 86% | 3 |
+| Expert + oracle mask | 76% [63–86] / 92% [88–95] | – | 1 |
+| ACT (25k bước, val MSE 0.0106) | 64% [50–76] / 86% [80–90] | 90% / 93% / 91% | 1 |
+| Diffusion (30k bước, 30 DDIM, val MSE 0.041) | 30% [19–44] / 70% [63–76] | 69% / 68% / 62% | 18 |
+
+- Grasp-bench (ground truth, 144 lần, đứng + nằm): **143/144** (1 mustard nằm trượt, tay phải).
+- Motion quality (24 ep., ground truth): 18/24 sạch, 88/96 vật, 0 dừng an toàn, gia tốc khớp RMS 2.0 rad/s², lún tối đa 2 mm.
+- Sim-gap từng yếu tố (16 ep./yếu tố): nominal 61/64; ma sát ×0.5 **52/64** (hại nhất, chủ yếu làm đổ vật);
+  nhiễu pose 12 mm 56/64; độ cứng ngón ×0.6 58/64; ma sát ×1.5 59/64; khối lượng ×0.5/×2 60/59; trễ 120 ms 61/64.
+- YOLO: mAP50 0.995 (mask mAP50-95 0.970), sai số vị trí 3.5 mm (p90 5.4), đứng/nằm đúng 97.9%.
+- Dataset expert_v1: 870 demo / 324k khung (mỗi vật 196–236; tay trái 547, phải 323).
+
+Nhận xét: expert thấp hơn bản cũ chỉ-vật-đứng (90%/98%) vì thêm vật nằm; lỗi chính trong cảnh đầy đủ là
+knocked_over / dropped, dù từng cú nắm riêng lẻ gần như luôn thành công → va chạm giữa vật khi gắp/mang.
+ACT ngang expert ở mọi mức (CI chồng nhau). Diffusion kém rõ và là controller duy nhất hay bị dừng an toàn (lực > 80 N).
+Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên máy Linux.
+
+## 6. Trạng thái (2026-10-10 sáng)
+
+- Pipeline đầy đủ đã chạy xong trên Windows (03:02), không lỗi. `data/` + `models/` trên máy Windows (không trong git).
+- Thay đổi phiên 5 được commit vào nhánh `windows-port` (chưa push, chưa merge vào `main`).
 
 ## 7. Việc còn lại
 
-1. Diffusion Policy: xem kết quả sau 30k bước; nếu vẫn kém ACT nhiều thì ghi rõ trong báo cáo.
-2. Sim-gap: tăng số episode mỗi mức (hiện 10). Yếu tố quan trọng nhất: ma sát ngón–vật.
-3. VLA (SmolVLA) chưa làm: cần ảnh + câu lệnh, fine-tune trên Kaggle.
-4. Chưa chạy trên Windows thật; viewer trong Docker (X11) chưa thử.
+1. Giảm knocked_over/dropped của expert trong cảnh đầy đủ (vd. chừa khoảng cách khi tay đi ngang vật bên cạnh,
+   thứ tự gắp theo nguy cơ va chạm) — grasp riêng lẻ đã ~99%.
+2. Diffusion Policy: thử chunk dài hơn / nhiều dữ liệu hơn / train thêm; ghi rõ kém ACT khi trình bày.
+3. VLA (SmolVLA) chưa làm: cần ảnh + câu lệnh, fine-tune trên Kaggle (GPU 4 GB không đủ).
+4. Viewer trong Docker (X11) chưa thử; lớp `inspire_real.py` chưa thử trên tay thật.
 5. Vật nằm chỉ ở ô ngoài và trong vùng hướng tay với tới (giới hạn động học G1 + tay úp) — ghi rõ khi trình bày.
 
 ## 8. Điều cần biết / lưu ý

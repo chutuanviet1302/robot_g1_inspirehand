@@ -94,7 +94,7 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
             with v.lock():
                 obs = env.reset("tidy_table", seed=seed)
                 planner.reset(obs)
-            typer.echo(f"seed {seed}: objects {env.info.objects}")
+            typer.echo(f"seed {seed}: objects {[str(o) for o in env.info.objects]}")
             done, settle, t_wall = False, 0, time.perf_counter()
             while v.is_running() and not done:
                 with v.lock():
@@ -112,7 +112,7 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
                 break
             i = env.info
             stop = env.safety.stats.stop_reason
-            typer.echo(f"  -> {i.outcome}: {i.n_cleared}/{len(i.objects)} in the bin {i.object_outcomes}"
+            typer.echo(f"  -> {i.outcome}: {i.n_cleared}/{len(i.objects)} in the bin {({str(k): v for k, v in i.object_outcomes.items()})}"
                        + (f"  [protective stop: {stop}]" if stop else ""))
             if not loop:
                 typer.echo("episode finished; close the window to exit")
