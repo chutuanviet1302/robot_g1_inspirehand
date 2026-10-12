@@ -39,6 +39,12 @@ def train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium
     from homehand.resources import safe_workers
     from homehand.rl.residual_env import NEIGHBOUR_PENALTY
 
+    import os
+    # one BLAS thread per simulation worker (no oversubscription; read by the workers at import). The throughput
+    # limit is elsewhere: the vectorised env waits for its slowest worker at every step, and a step can be one
+    # control step or a reset / a long expert-driven stretch (3 workers: ~22 agent steps/s in total)
+    for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(v, "1")
     out = paths.MODELS_DIR / name
     out.mkdir(parents=True, exist_ok=True)
     npen = NEIGHBOUR_PENALTY if neighbour_penalty is None else neighbour_penalty
