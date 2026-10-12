@@ -139,11 +139,11 @@ def collect_vla(name: str = "vla_v1", n: int = typer.Option(120, "-n", "--n"), w
 
 
 @app.command()
-def train(policy: str = typer.Option("act", help="act | diffusion"), dataset: str = "expert_v1",
+def train(policy: str = typer.Option("act", help="act | diffusion | flow"), dataset: str = "expert_v1",
           steps: int = 20000, batch_size: int = 256, lr: float = 3e-4, name: str = "",
           init: str = typer.Option("", help="model directory to continue training from"),
           log_every: int = 500):
-    """Train ACT or Diffusion Policy on a recorded dataset."""
+    """Train ACT, Diffusion Policy or Flow Matching on a recorded dataset."""
     from homehand.policy.train import train as run
     run(policy, dataset, steps=steps, batch_size=batch_size, lr=lr, out_name=name or None, init=init or None,
         log_every=log_every)

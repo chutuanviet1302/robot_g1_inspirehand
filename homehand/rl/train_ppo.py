@@ -3,7 +3,8 @@
     homehand rl-train --steps 1000000 --workers 4 --randomization medium
 
 Writes models/<name>/policy.zip, obs_stats.npz (observation normalisation, used by `ResidualPolicy`) and
-progress.csv (per-rollout mean reward per term, pick success rate, steps/s) for the learning curves.
+progress.csv (per rollout: reward per term summed per pick, pick_success = share of picks ending in the bin,
+steps/s) for the learning curves.
 Resumable: an existing policy.zip in the output directory is loaded and training continues.
 """
 
@@ -75,7 +76,7 @@ def train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium
 
         def _on_rollout_end(self):
             row = {"steps": self.num_timesteps, "picks": len(self.ends),
-                   "binned": round(float(np.mean(self.ends)), 4) if self.ends else "",
+                   "pick_success": round(float(np.mean(self.ends)), 4) if self.ends else "",
                    "steps_per_s": round(self.num_timesteps / max(time.time() - self.t0, 1e-6), 1)}
             row.update({k: round(float(np.sum(v)) / max(len(self.ends), 1), 4) for k, v in self.terms.items()})
             if self.w is None:
