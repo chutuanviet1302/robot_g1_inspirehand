@@ -203,6 +203,37 @@ def test_clearance_detects_neighbour():
     assert box_distance(np.array([0.3, 0.13, 0.8 + 0.175 + 0.05]), box) == pytest.approx(0.05, abs=1e-6)
 
 
+def test_clearance_probes_follow_the_hand_command():
+    """The IK model keeps the fingers at 0: the probes must put them where the commanded hand shape is (the
+    open thumb sits ~4 cm from its zero position), and cover the forearm."""
+    from homehand.control import clearance as C
+    from homehand.control.grasps import GRASPS, LYING_GRASP
+    from homehand.control.ik import ArmIK
+    ik = ArmIK()
+    p0, _ = C.probes(ik, ik.q_home, "left")
+    p1, _ = C.probes(ik, C.with_hand(ik, ik.q_home, "left", GRASPS[LYING_GRASP["soup_can"]].open_cmd()), "left")
+    assert np.linalg.norm(p1 - p0, axis=1).max() > 0.03
+    elbow = ik.cfg.data.xpos[ik.model.body("left_elbow_link").id]
+    assert np.linalg.norm(p0 - elbow, axis=1).min() < 0.05
+
+
+def test_drop_spots_keep_objects_inside_the_bin():
+    """Every drop spot keeps the object's whole footprint inside the bin walls (a sugar box dropped with its
+    edge over the side wall tipped out of the bin)."""
+    from homehand.control.planner import TidyPlanner
+    from homehand.control.skills import Target
+    from homehand.env.kitchen_env import BIN_HALF_INNER, BIN_XY
+    from homehand.model.objects import OBJECTS
+    pl = object.__new__(TidyPlanner)
+    for name, o in OBJECTS.items():
+        r = max(o.half_x, o.half_y)
+        for side in ("left", "right"):
+            pl.in_bin_xy, pl.used_spots = [], []
+            for _ in range(4):
+                xy = pl.choose_drop_spot(side, Target(name, np.array([0.3, 0.2, 0.8]), 0.0, 0.1))
+                assert np.all(np.abs(xy - BIN_XY) + r <= BIN_HALF_INNER - 0.019), (name, side, xy)
+
+
 def test_wrist_cameras_look_along_the_fingers():
     import mujoco
     from homehand.model import spec
