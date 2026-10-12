@@ -168,6 +168,15 @@ def evaluate(controller: str = "expert", perception: str = "auto", randomization
                            "safety": s["safety"]}, indent=2))
 
 
+@app.command("rl-train")
+def rl_train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium", name: str = "residual_ppo",
+             neighbour_penalty: float = typer.Option(None, help="override the reward's neighbour penalty"),
+             seed: int = 0):
+    """Train the residual PPO policy on top of the expert (resumes from models/<name>)."""
+    from homehand.rl.train_ppo import train
+    typer.echo(train(steps, workers, randomization, name, neighbour_penalty, seed))
+
+
 @perception_app.command("gen-data")
 def perception_gen(n: int = 1500, seed: int = 0):
     from homehand.perception.train_detector import gen_data

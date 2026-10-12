@@ -12,7 +12,7 @@ from homehand.control.ik import ArmIK
 from homehand.control.skills import Target, compose_action
 from homehand.policy.features import merge_action, side_action, skill_features
 from homehand.control.grasps import RELAXED_HAND
-from homehand.policy.models import MODELS
+from homehand.policy.models import GENERATIVE, MODELS
 
 DIFFUSION_INFER_STEPS = 30
 
@@ -21,7 +21,7 @@ class LoadedPolicy:
     """A trained checkpoint + normalisation + execution strategy.
 
     ACT: query every step, temporal ensembling of overlapping chunks (weights exp(-m * age)).
-    Diffusion: receding horizon - execute `n_exec` actions of each sampled chunk, then re-plan.
+    Diffusion / flow matching: receding horizon - execute `n_exec` actions of each sampled chunk, then re-plan.
     """
 
     def __init__(self, path: Path | str, device: str | None = None, n_exec: int = 8, ensemble_m: float = 0.05):
@@ -52,14 +52,14 @@ class LoadedPolicy:
 
     def _infer(self, feats: np.ndarray) -> np.ndarray:
         x = torch.from_numpy((feats - self.stats["obs_mean"]) / self.stats["obs_std"]).float()[None].to(self.device)
-        if self.kind == "diffusion":
+        if self.kind in GENERATIVE:
             y = self.model.predict(x, generator=self.gen)[0].cpu().numpy()
         else:
             y = self.model.predict(x)[0].cpu().numpy()
         return y * self.stats["act_std"] + self.stats["act_mean"]
 
     def act(self, feats: np.ndarray) -> np.ndarray:
-        if self.kind == "diffusion":
+        if self.kind in GENERATIVE:
             if not self.plan:
                 self.plan = list(self._infer(feats)[: self.n_exec])
             a = self.plan.pop(0)

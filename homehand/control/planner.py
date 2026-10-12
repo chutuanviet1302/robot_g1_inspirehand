@@ -154,6 +154,11 @@ class TidyPlanner:
         if self.skill_kind == "smolvla":  # vision-language-action policy (LeRobot environment)
             from homehand.policy.smolvla_skill import SmolVLASkill
             return SmolVLASkill(self.policy, self.env, self.ik, side, target, self.q, self.hand_cmd)
+        if self.skill_kind == "residual":  # expert + learned residual in the contact phases (homehand.rl)
+            from homehand.rl.residual import ResidualSkill
+            others = [t for t in self.last_perception.targets if t.name != target.name]
+            return ResidualSkill(self.policy, self.ik, side, target, self.q, self.hand_cmd, obstacles=others,
+                                 inflate=self.inflate)
         if self.skill_kind != "expert":  # learned policy (ACT / Diffusion Policy)
             from homehand.policy.skill import PolicySkill
             return PolicySkill(self.policy, self.ik, side, target, self.q, self.hand_cmd)

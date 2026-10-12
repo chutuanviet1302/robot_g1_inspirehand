@@ -4,8 +4,11 @@ ACT              Action Chunking with Transformers (Zhao et al. 2023): CVAE + tr
                  chunk of future joint targets; temporal ensembling at inference.
 DiffusionPolicy  Diffusion Policy (Chi et al. 2023), CNN variant: a 1D temporal U-Net with FiLM conditioning
                  denoises an action chunk; DDPM training, DDIM sampling; receding-horizon execution.
+FlowMatchingPolicy  Conditional flow matching / rectified flow (Lipman et al. 2023, Liu et al. 2023; the action
+                 head of pi0): the same U-Net regresses the velocity that carries noise to the action chunk along a
+                 straight path; a few Euler steps at inference.
 
-Both are trained on the same dataset with the same normalisation and evaluated in the same harness.
+All are trained on the same dataset with the same normalisation and evaluated in the same harness.
 """
 
 from __future__ import annotations
@@ -184,4 +187,42 @@ class DiffusionPolicy(nn.Module):
         return x
 
 
-MODELS = {"act": ACT, "diffusion": DiffusionPolicy}
+class FlowMatchingPolicy(nn.Module):
+    """x_t = (1 - t) eps + t a, t ~ U(0, 1); the network predicts v = a - eps; sampling integrates dx/dt = v from
+    noise (t = 0) to the action chunk (t = 1) with `n_infer` Euler steps."""
+    kind = "flow"
+    T_SCALE = 100.0     # t in [0, 1] -> the sinusoidal embedding's range (the diffusion steps are 0..99)
+
+    def __init__(self, obs_dim: int, act_dim: int, chunk: int = 16, n_infer_steps: int = 10, cond_dim: int = 256,
+                 dims: tuple = (128, 256, 512)):
+        super().__init__()
+        self.cfg = dict(obs_dim=obs_dim, act_dim=act_dim, chunk=chunk, n_infer_steps=n_infer_steps,
+                        cond_dim=cond_dim, dims=tuple(dims))
+        self.chunk, self.n_infer = chunk, n_infer_steps
+        self.obs_enc = nn.Sequential(nn.Linear(obs_dim, cond_dim), nn.Mish(), nn.Linear(cond_dim, cond_dim))
+        self.net = UNet1D(act_dim, cond_dim, dims=tuple(dims))
+
+    def loss(self, obs, actions, mask):
+        b = obs.shape[0]
+        t = torch.rand(b, device=obs.device)
+        noise = torch.randn_like(actions)
+        x_t = (1 - t)[:, None, None] * noise + t[:, None, None] * actions
+        pred = self.net(x_t, t * self.T_SCALE, self.obs_enc(obs))
+        mse = ((pred - (actions - noise)) ** 2).mean(-1)
+        loss = (mse * mask).sum() / mask.sum()
+        return loss, {"mse": loss.item()}
+
+    @torch.no_grad()
+    def predict(self, obs, generator: torch.Generator | None = None):
+        b = obs.shape[0]
+        cond = self.obs_enc(obs)
+        x = torch.randn(b, self.chunk, self.cfg["act_dim"], device=obs.device, generator=generator)
+        dt = 1.0 / self.n_infer
+        for i in range(self.n_infer):
+            t = torch.full((b,), i * dt * self.T_SCALE, device=obs.device)
+            x = x + dt * self.net(x, t, cond)
+        return x.clamp(-5, 5)
+
+
+MODELS = {"act": ACT, "diffusion": DiffusionPolicy, "flow": FlowMatchingPolicy}
+GENERATIVE = ("diffusion", "flow")   # sampled chunks, executed with a receding horizon

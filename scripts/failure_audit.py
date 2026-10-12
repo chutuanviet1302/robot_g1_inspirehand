@@ -49,15 +49,26 @@ def culprit_kind(by: str | None, phase: str, carried: str | None) -> str:
     return prefix + part
 
 
-def run_seed(args: tuple[int, str, str]) -> dict:
-    seed, perception, randomization = args
+_POLICY: dict = {}
+
+
+def run_seed(args: tuple) -> dict:
+    seed, perception, randomization, *rest = args
+    controller = rest[0] if rest else "expert"
     os.environ.setdefault("MUJOCO_GL", "egl" if sys.platform.startswith("linux") else "glfw")
     from homehand.control.planner import TidyPlanner
     from homehand.env.kitchen_env import KitchenEnv
     from homehand.runner import run_episode
 
+    policy = None
+    if controller != "expert":
+        if controller not in _POLICY:          # once per worker
+            from homehand import paths
+            from homehand.rl.residual import ResidualPolicy
+            _POLICY[controller] = ResidualPolicy(paths.MODELS_DIR / controller)
+        policy = _POLICY[controller]
     env = KitchenEnv()
-    pl = TidyPlanner(env, perception=perception)
+    pl = TidyPlanner(env, perception=perception, policy=policy)
     r = run_episode(env, pl, seed=seed, randomization=randomization)
     failures = []
     for name, c in r["causes"].items():
@@ -120,6 +131,7 @@ def main() -> None:
     ap.add_argument("--seeds", default="0-49")
     ap.add_argument("--perception", default="ground_truth", choices=["ground_truth", "oracle", "yolo"])
     ap.add_argument("--randomization", default="nominal")
+    ap.add_argument("--controller", default="expert", help="expert, or a residual policy in models/ (residual_*)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--tag", default="run")
     a = ap.parse_args()
@@ -127,12 +139,12 @@ def main() -> None:
     for part in a.seeds.split(","):        # "0-99" or "4,12,21" or a mix
         lo, _, hi = part.partition("-")
         seeds += list(range(int(lo), int(hi or lo) + 1))
-    per = WORKER_TORCH_MB if a.perception == "yolo" else WORKER_MB
+    per = WORKER_TORCH_MB if a.perception == "yolo" or a.controller != "expert" else WORKER_MB
     workers = safe_workers(a.workers, per_worker_mb=per)
-    print(f"{len(seeds)} episodes, {a.perception}, {a.randomization}, {workers} workers", flush=True)
+    print(f"{len(seeds)} episodes, {a.controller}, {a.perception}, {a.randomization}, {workers} workers", flush=True)
     res = []
     with mp.get_context("spawn").Pool(workers) as pool:
-        for r in pool.imap_unordered(run_seed, [(s, a.perception, a.randomization) for s in seeds]):
+        for r in pool.imap_unordered(run_seed, [(s, a.perception, a.randomization, a.controller) for s in seeds]):
             res.append(r)
             if r["failures"]:
                 fs = ", ".join(f"{f['object']}:{f['outcome']}<-{f['cause']}@{(f.get('phase') or '-')}"
@@ -143,7 +155,8 @@ def main() -> None:
     res.sort(key=lambda r: r["seed"])
     summary = summarise(res)
     print(json.dumps(summary, indent=1))
-    out = ROOT / "data" / f"failure_audit_{a.perception}_{a.tag}.json"
+    ctrl = "" if a.controller == "expert" else f"{a.controller}_"
+    out = ROOT / "data" / f"failure_audit_{ctrl}{a.perception}_{a.tag}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({"args": vars(a), "summary": summary, "episodes": res}, indent=1))
     print(f"-> {out}")

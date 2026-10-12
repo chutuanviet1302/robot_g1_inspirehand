@@ -16,7 +16,7 @@ import torch
 
 from homehand import paths
 from homehand.data.record import load
-from homehand.policy.models import MODELS
+from homehand.policy.models import GENERATIVE, MODELS
 
 
 class ChunkSampler:
@@ -83,7 +83,7 @@ def train(policy: str = "act", dataset: str = "expert_v1", steps: int = 20_000, 
     gen = torch.Generator().manual_seed(seed)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4 if policy == "act" else 1e-6)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps, pct_start=0.05)
-    ema = copy.deepcopy(model).eval() if policy == "diffusion" else None
+    ema = copy.deepcopy(model).eval() if policy in GENERATIVE else None
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[train] {policy}: {n_params / 1e6:.2f} M params, {len(tr)} train / {len(va)} val frames, device={device}")
 

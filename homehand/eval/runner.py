@@ -29,7 +29,10 @@ def _init_worker(controller: str, perception: str) -> None:
     from homehand.env.kitchen_env import KitchenEnv
 
     policy = None
-    if controller != "expert":
+    if controller.startswith("residual"):   # expert + residual RL policy: models/<controller>
+        from homehand.rl.residual import ResidualPolicy
+        policy = ResidualPolicy(paths.MODELS_DIR / controller)
+    elif controller != "expert":
         from homehand.policy.skill import load_policy
         policy = load_policy(controller, device="cpu")  # many small workers: CPU inference
     env = KitchenEnv(record=True)

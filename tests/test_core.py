@@ -276,6 +276,70 @@ def test_expert_picks_soup_can():
     assert res["outcome"] == "success", res
 
 
+def test_zero_residual_is_the_expert():
+    """Expert + a residual policy that outputs zeros commands exactly what the expert commands."""
+    from homehand.control.planner import TidyPlanner
+    from homehand.env.kitchen_env import KitchenEnv
+    from homehand.rl.residual import ACT_DIM, OBS_DIM
+    from homehand.runner import run_episode
+
+    class Zero:
+        kind = "residual"
+        seen = []
+
+        def act(self, x):
+            assert x.shape == (OBS_DIM,) and np.all(np.isfinite(x))
+            self.seen.append(1)
+            return np.zeros(ACT_DIM)
+
+    layout = [("soup_can", 0.31, -0.18, 0.0)]
+    acts = {}
+    for name, policy in (("expert", None), ("residual", Zero())):
+        env = KitchenEnv()
+        planner = TidyPlanner(env, perception="ground_truth", policy=policy)
+        acts[name] = []
+        run_episode(env, planner, task="pick_place", seed=0, layout=layout,
+                    on_step=lambda obs, a, out=acts[name]: out.append(np.array(a)))
+    assert Zero.seen, "the residual was never asked"
+    assert len(acts["expert"]) == len(acts["residual"])
+    assert np.array_equal(np.array(acts["expert"]), np.array(acts["residual"]))
+
+
+def test_flow_matching_policy_learns_a_mapping():
+    """Shapes, and a tiny overfit: two observations -> two constant action chunks; Euler sampling recovers them."""
+    import torch
+    from homehand.policy.models import MODELS
+    torch.manual_seed(0)
+    m = MODELS["flow"](obs_dim=4, act_dim=3, chunk=8, n_infer_steps=10, cond_dim=64, dims=(32, 64))
+    obs = torch.tensor([[1.0, 0, 0, 0], [0, 1.0, 0, 0]]).repeat(32, 1)
+    target = torch.stack([torch.full((8, 3), 1.0), torch.full((8, 3), -1.0)]).repeat(32, 1, 1)
+    mask = torch.ones(64, 8)
+    opt = torch.optim.Adam(m.parameters(), lr=2e-3)
+    for _ in range(300):
+        loss, _ = m.loss(obs, target, mask)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    m.eval()
+    out = m.predict(obs[:2], generator=torch.Generator().manual_seed(1))
+    assert out.shape == (2, 8, 3)
+    assert torch.allclose(out.mean((1, 2)), torch.tensor([1.0, -1.0]), atol=0.2), out.mean((1, 2))
+
+
+def test_residual_env_reward_terms():
+    pytest.importorskip("gymnasium")
+    from homehand.rl.residual import ACT_DIM, OBS_DIM
+    from homehand.rl.residual_env import ResidualPickEnv
+    env = ResidualPickEnv(randomization="nominal", seed=3)
+    obs, _ = env.reset()
+    assert obs.shape == (OBS_DIM,) and np.all(np.isfinite(obs))
+    for _ in range(5):
+        obs, r, done, trunc, info = env.step(np.zeros(ACT_DIM))
+        assert np.isfinite(r) and abs(r - sum(info["terms"].values())) < 1e-9
+        if done or trunc:
+            break
+
+
 def _can_render() -> bool:
     try:
         import mujoco

@@ -25,6 +25,7 @@ from homehand.model import spec
 from homehand.model.objects import CLASS_NAMES, LYING, OBJECTS, body_pose_for, lying_dims, rest_of
 
 TABLE_Z = 0.80
+FINGERS = ("thumb", "index", "middle", "ring", "pinky")
 BIN_XY = np.array([0.56, 0.0])   # as close as the objects allow: the G1 palm reaches x ~ 0.46 m at drop height
 BIN_HALF_INNER = np.array([0.135, 0.15])
 BIN_WALL_TOP = TABLE_Z + 0.10
@@ -155,6 +156,16 @@ class KitchenEnv:
         }
         self.body_side = {b: s for s, bs in self.hand_bodies.items() for b in bs}
         self.finger_geoms = np.array([g for g in range(m.ngeom) if m.geom_priority[g] == 1])
+        # body -> (side, finger index) for the per-finger contact force (the real Inspire hand reports one force
+        # per finger, thumb .. pinky)
+        self.body_finger = {}
+        for b in range(m.nbody):
+            for side in spec.SIDES:
+                name = m.body(b).name
+                if name.startswith(spec.PREFIX[side]):
+                    for i, f in enumerate(FINGERS):
+                        if f in name:
+                            self.body_finger[b] = (side, i)
         self.nominal = {
             "friction": m.geom_friction.copy(),
             "mass": m.body_mass.copy(),
@@ -356,11 +367,26 @@ class KitchenEnv:
             "arm_q": d.qpos[self.arm_qadr].copy(),
             "hand_q": d.qpos[self.hand_qadr].copy(),
             "palm": {s: d.site_xpos[self.palm_site[s]].copy() for s in spec.SIDES},
+            "finger_force": self.finger_forces(),
             "objects": objects,
             "bin": np.array([*BIN_XY, TABLE_Z]),
         }
 
     # ------------------------------------------------------------------ bookkeeping
+    def finger_forces(self) -> dict[str, np.ndarray]:
+        """Normal contact force (N) on each finger (thumb .. pinky) of each hand, against anything."""
+        d, m = self.data, self.model
+        out = {s: np.zeros(len(FINGERS)) for s in spec.SIDES}
+        fr = np.zeros(6)
+        for i in range(d.ncon):
+            c = d.contact[i]
+            for b in (m.geom_bodyid[c.geom1], m.geom_bodyid[c.geom2]):
+                if b in self.body_finger:
+                    side, k = self.body_finger[b]
+                    mujoco.mj_contactForce(m, d, i, fr)
+                    out[side][k] += abs(fr[0])
+        return out
+
     def contacts_with_hands(self) -> dict[str, set[str]]:
         """object name -> set of hand sides touching it."""
         d, m = self.data, self.model
