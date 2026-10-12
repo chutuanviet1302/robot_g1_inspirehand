@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import numpy as np
 
@@ -62,6 +63,7 @@ def build(out_dir=None, source: str = "auto") -> None:
         from homehand.model.build_repo import build_from_repo
         build_from_repo(out_dir)
         build_scene(out_dir)
+        build_bimanual_scene(out_dir)
         print(f"[build] robot from {paths.REPO_MODEL_DIR.name}; wrote {out_dir / paths.ROBOT_XML.name}, scene and objects")
         return
     if not paths.G1_DIR.exists() or not paths.INSPIRE_DIR.exists():
@@ -197,6 +199,7 @@ def build(out_dir=None, source: str = "auto") -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     tree.write(out_dir / paths.ROBOT_XML.name)
     build_scene(out_dir)
+    build_bimanual_scene(out_dir)
     print(f"[build] wrote {out_dir / paths.ROBOT_XML.name}, {paths.SCENE_XML.name}, {paths.OBJECTS_JSON.name}")
 
 
@@ -272,3 +275,24 @@ def build_scene(out_dir) -> None:
     ET.indent(tree)
     tree.write(out_dir / paths.SCENE_XML.name)
     (out_dir / paths.OBJECTS_JSON.name).write_text(json.dumps(info, indent=2))
+
+
+# Bimanual task: a box too wide for one hand (14 x 20 x 12 cm, 0.6 kg), lifted by pressing both palms on its sides.
+# It lives in its own scene file so that the tidy-table scene (and every result measured on it) stays unchanged.
+TOTE_HALF = (0.07, 0.10, 0.06)
+TOTE_MASS = 0.6
+
+
+def build_bimanual_scene(out_dir=None) -> None:
+    out_dir = Path(out_dir or paths.GENERATED_DIR)
+    tree = ET.parse(out_dir / paths.SCENE_XML.name)
+    world = tree.getroot().find("worldbody")
+    body = ET.SubElement(world, "body", name="tote", pos="-1.2 1.2 0.001")
+    ET.SubElement(body, "freejoint", name="tote_free")
+    hx, hy, hz = TOTE_HALF
+    ET.SubElement(body, "geom", name="tote", type="box", size=f"{hx} {hy} {hz}", pos=f"0 0 {hz}",
+                  mass=str(TOTE_MASS), rgba="0.85 0.55 0.25 1", attrib={"class": "object"})
+    ET.indent(tree)
+    tree.write(out_dir / paths.BIMANUAL_XML.name)
+    print(f"[build] wrote {out_dir / paths.BIMANUAL_XML.name}")
+

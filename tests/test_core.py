@@ -326,6 +326,21 @@ def test_flow_matching_policy_learns_a_mapping():
     assert torch.allclose(out.mean((1, 2)), torch.tensor([1.0, -1.0]), atol=0.2), out.mean((1, 2))
 
 
+def test_bimanual_expert_lifts_the_box():
+    """Both palms squeeze the wide box, lift it, carry it to the goal and put it down (nominal physics)."""
+    from homehand import paths
+    if not paths.BIMANUAL_XML.exists():
+        from homehand.model.build import build_bimanual_scene
+        build_bimanual_scene()
+    from homehand.control.bimanual import BimanualExpert
+    from homehand.env.bimanual_env import BimanualEnv
+    from homehand.runner import run_episode
+    env = BimanualEnv()
+    r = run_episode(env, BimanualExpert(env), task="bimanual_lift", seed=0)
+    assert r["outcome"] == "success", env.info.details
+    assert not env.safety.stats.protective_stop
+
+
 def test_residual_env_reward_terms():
     pytest.importorskip("gymnasium")
     from homehand.rl.residual import ACT_DIM, OBS_DIM

@@ -25,6 +25,7 @@ ASSETS_DIR = PACKAGE_DIR / "assets"
 GENERATED_DIR = Path(os.environ.get("HOMEHAND_GENERATED", PROJECT_ROOT / "generated"))
 ROBOT_XML = GENERATED_DIR / "g1_inspire.xml"
 SCENE_XML = GENERATED_DIR / "scene_kitchen.xml"
+BIMANUAL_XML = GENERATED_DIR / "scene_bimanual.xml"   # the kitchen scene + a large box lifted with both hands
 OBJECTS_JSON = GENERATED_DIR / "objects.json"
 
 # Runtime data: datasets, eval database, episode replays, checkpoints.
