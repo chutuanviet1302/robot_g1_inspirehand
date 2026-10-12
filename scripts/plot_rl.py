@@ -1,5 +1,5 @@
-"""Learning curves of the residual PPO run: share of picks still in the hand at the release point, and the reward
-terms per pick, against environment steps (moving window over rollouts, the expert's level for reference).
+"""Learning curves of a PPO run (residual pick or bimanual grip): episode success (pick: still in the hand at
+the release point; grip: the whole box task), and the reward terms per episode, against environment steps (moving window over rollouts, the expert's level for reference).
 
     python scripts/plot_rl.py models/residual_ppo [--window 20] [--expert 0.75]
 """
@@ -33,15 +33,15 @@ def main() -> None:
     n = np.convolve(picks, k, "valid")
     half = 1.96 * np.sqrt(succ * (1 - succ) / n)          # normal approximation, for the band only
     xs = steps[w - 1:]
-    terms = [t for t in ("lift", "lifted", "carried", "neighbour", "target", "force", "action", "stop") if t in rows[0]]
+    terms = [t for t in rows[0] if t not in ("steps", "picks", "pick_success", "steps_per_s")]   # every reward term
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
-    ax1.plot(xs, succ, color="C0", label="expert + residual")
+    ax1.plot(xs, succ, color="C0", label="expert + learned policy (training rollouts)")
     ax1.fill_between(xs, succ - half, succ + half, color="C0", alpha=0.2)
     if a.expert is not None:
         ax1.axhline(a.expert, color="0.4", ls="--", label="expert alone")
-    ax1.set(xlabel="environment steps", ylabel="picks carried to the bin", ylim=(0, 1),
-            title=f"pick success (window {w} rollouts)")
+    ax1.set(xlabel="environment steps", ylabel="episode success", ylim=(0, 1),
+            title=f"success (window {w} rollouts)")
     ax1.legend(loc="lower right")
     for i, t in enumerate(terms):
         v = np.array([float(r[t] or 0) for r in rows])

@@ -18,19 +18,25 @@ from pathlib import Path
 import numpy as np
 
 
-def _make(rank: int, randomization: str, neighbour_penalty: float):
+def _make(rank: int, randomization: str, neighbour_penalty: float, task: str = "pick"):
     def thunk():
         import os
         os.environ.setdefault("MUJOCO_GL", "egl" if os.name != "nt" else "glfw")
         import torch
         torch.set_num_threads(1)
+        if task == "grip":
+            from homehand.rl.grip_env import GripEnv
+            return GripEnv(randomization=randomization, seed=1000 + rank)
         from homehand.rl.residual_env import ResidualPickEnv
         return ResidualPickEnv(randomization=randomization, seed=1000 + rank, neighbour_penalty=neighbour_penalty)
     return thunk
 
 
 def train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium", name: str = "residual_ppo",
-          neighbour_penalty: float | None = None, seed: int = 0) -> Path:
+          neighbour_penalty: float | None = None, seed: int = 0, task: str = "pick",
+          log_std_init: float = -1.0, n_steps: int = 512) -> Path:
+    """task: "pick" (residual on the expert's pick, homehand.rl.residual_env) or "grip" (bimanual squeeze,
+    homehand.rl.grip_env)."""
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
@@ -49,7 +55,7 @@ def train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium
     out.mkdir(parents=True, exist_ok=True)
     npen = NEIGHBOUR_PENALTY if neighbour_penalty is None else neighbour_penalty
     n = safe_workers(workers)
-    venv = SubprocVecEnv([_make(i, randomization, npen) for i in range(n)], start_method="spawn")
+    venv = SubprocVecEnv([_make(i, randomization, npen, task) for i in range(n)], start_method="spawn")
     venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=0.99)
     if (out / "policy.zip").exists():
         model = PPO.load(out / "policy.zip", env=venv, device="cpu")
@@ -57,9 +63,9 @@ def train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium
         venv.obs_rms.mean, venv.obs_rms.var = st["mean"], st["var"]
         print(f"[rl] continuing from {out / 'policy.zip'} ({model.num_timesteps} steps)")
     else:
-        model = PPO("MlpPolicy", venv, n_steps=512, batch_size=256, n_epochs=10, gamma=0.99, gae_lambda=0.95,
+        model = PPO("MlpPolicy", venv, n_steps=n_steps, batch_size=256, n_epochs=10, gamma=0.99, gae_lambda=0.95,
                     learning_rate=3e-4, clip_range=0.2, ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5,
-                    policy_kwargs=dict(net_arch=dict(pi=[256, 256], vf=[256, 256]), log_std_init=-1.0),
+                    policy_kwargs=dict(net_arch=dict(pi=[256, 256], vf=[256, 256]), log_std_init=log_std_init),
                     seed=seed, device="cpu", verbose=0)
 
     log_path = out / "progress.csv"

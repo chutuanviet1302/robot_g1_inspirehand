@@ -341,6 +341,24 @@ def test_bimanual_expert_lifts_the_box():
     assert not env.safety.stats.protective_stop
 
 
+def test_grip_env_reward_terms():
+    pytest.importorskip("gymnasium")
+    from homehand import paths
+    if not paths.BIMANUAL_XML.exists():
+        from homehand.model.build import build_bimanual_scene
+        build_bimanual_scene()
+    from homehand.rl.grip import ACT_DIM, OBS_DIM
+    from homehand.rl.grip_env import GripEnv
+    env = GripEnv(randomization="nominal", seed=0)
+    obs, _ = env.reset()
+    assert obs.shape == (OBS_DIM,) and np.all(np.isfinite(obs))
+    for _ in range(4):
+        obs, r, done, _, info = env.step(np.zeros(ACT_DIM))
+        assert np.isfinite(r) and abs(r - sum(info["terms"].values())) < 1e-9
+        if done:
+            break
+
+
 def test_residual_env_reward_terms():
     pytest.importorskip("gymnasium")
     from homehand.rl.residual import ACT_DIM, OBS_DIM

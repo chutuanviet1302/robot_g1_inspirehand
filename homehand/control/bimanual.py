@@ -53,8 +53,10 @@ class BimanualExpert:
         return {s: (np.array([*(centre + sgn * half_y * side_dir), z]), q)
                 for s, sgn in (("left", 1.0), ("right", -1.0))}
 
-    def _move(self, q0: np.ndarray, start: dict, goal: dict, min_steps: int = 10) -> tuple[np.ndarray, list]:
-        """Joint path for a straight move of both palms from `start` to `goal`, with its time profile."""
+    def _move(self, q0: np.ndarray, start: dict, goal: dict, min_steps: int = 10,
+              steps: int | None = None) -> tuple[np.ndarray, list]:
+        """Joint path for a straight move of both palms from `start` to `goal`, with its time profile (`steps`
+        control steps, by default set by SPEED)."""
         dist = max(float(np.linalg.norm(goal[s][0] - start[s][0])) for s in goal)
         n = max(2, int(np.ceil(dist / STEP)))
         qs, q = [], q0
@@ -63,11 +65,13 @@ class BimanualExpert:
             targets = {s: (start[s][0] + u * (goal[s][0] - start[s][0]), goal[s][1]) for s in goal}
             q, _ = self.ik.solve(q, targets, iters=40)
             qs.append(q)
-        steps = max(min_steps, int(np.ceil(1.875 * dist / SPEED / 0.04)))
+        steps = steps or max(min_steps, int(np.ceil(1.875 * dist / SPEED / 0.04)))
         traj = [qs[min(len(qs) - 1, int(min_jerk((i + 1) / steps) * len(qs)))] for i in range(steps)]
         return q, traj
 
-    def reset(self, obs: dict) -> None:
+    def make_plan(self, obs: dict, squeeze: float = SQUEEZE, timing: list | None = None) -> tuple[list, list]:
+        """[(phase, q)] for the whole task with the palms `squeeze` past the box's sides, and the step count of
+        each move; `timing` (a previous plan's step counts) gives plans for different squeezes the same timing."""
         tote = obs["tote"]
         c, yaw, half = np.asarray(tote["pos"][:2], float), float(tote["yaw"]), tote["half"]
         goal_c = np.asarray(obs["goal"], float)
@@ -79,21 +83,26 @@ class BimanualExpert:
         keys = [
             ("reach", self._palms(c, yaw, hy + OUT, z + ABOVE), 20, 0),
             ("descend", self._palms(c, yaw, hy + OUT, z), 10, 0),
-            ("squeeze", self._palms(c, yaw, hy - SQUEEZE, z), 12, 8),
-            ("lift", self._palms(c, yaw, hy - SQUEEZE, zt), 15, HOLD_STEPS + 10),
-            ("carry", self._palms(goal_c, yaw, hy - SQUEEZE, zt), 15, 5),
-            ("place", self._palms(goal_c, yaw, hy - SQUEEZE, z + 0.004), 15, 5),
+            ("squeeze", self._palms(c, yaw, hy - squeeze, z), 12, 8),
+            ("lift", self._palms(c, yaw, hy - squeeze, zt), 15, HOLD_STEPS + 10),
+            ("carry", self._palms(goal_c, yaw, hy - squeeze, zt), 15, 5),
+            ("place", self._palms(goal_c, yaw, hy - squeeze, z + 0.004), 15, 5),
             ("release", self._palms(goal_c, yaw, hy + OUT, z + 0.004), 10, 0),
             ("up", self._palms(goal_c, yaw, hy + OUT, z + ABOVE), 10, 0),
         ]
-        self.plan, cur = [], home
-        for name, goal, min_steps, hold in keys:
-            q, traj = self._move(q, cur, goal, min_steps)
-            self.plan += [(name, qq) for qq in traj] + [(name, q)] * hold
+        plan, counts, cur = [], [], home
+        for i, (name, goal, min_steps, hold) in enumerate(keys):
+            q, traj = self._move(q, cur, goal, min_steps, steps=timing[i] if timing else None)
+            plan += [(name, qq) for qq in traj] + [(name, q)] * hold
+            counts.append(len(traj))
             cur = goal
         # back to the ready pose in joint space (min-jerk)
         n = 30
-        self.plan += [("return", q + min_jerk((i + 1) / n) * (ik.q_home - q)) for i in range(n)]
+        plan += [("return", q + min_jerk((i + 1) / n) * (ik.q_home - q)) for i in range(n)]
+        return plan, counts
+
+    def reset(self, obs: dict) -> None:
+        self.plan, self.timing = self.make_plan(obs)
         self.k = 0
         self.log = [{"t": obs["t"], "event": "plan", "steps": len(self.plan)}]
         self.hand = {s: np.array(HAND, float) for s in ("left", "right")}
