@@ -1,15 +1,16 @@
 """Gymnasium environment for the residual policy: one pick of a real tidy-table scene per episode.
 
-reset: a tidy-table layout (random seed, physics randomisation), the expert first clears 0-1 objects (so the
+reset: a tidy-table layout (random seed, physics randomisation), the expert first clears 0-1 objects (1 in 4) (so the
 policy sees cluttered and sparse counters), then the planner chooses the next object and hand as usual.
 The expert runs every non-contact phase by itself; the agent is asked only in `ACTIVE_PHASES`. The episode
-ends when the pick is over (object released over the bin, or an empty grasp), when the object or a neighbour
-falls, or on a protective stop.
+ends when the hand has carried the object to the release point (the drop, the retreat and the way back cannot
+be changed by the residual and are not simulated: 2-3x more episodes per hour), after an empty grasp, when the
+object or a neighbour falls, or on a protective stop.
 
 Reward (every term is logged in `info["terms"]`):
   lift      potential shaping on the target's height while it is in the hand (saturates at LIFT_FULL)
   lifted    +LIFTED_BONUS once the lift phase ends with the object in the hand
-  binned    +BIN_BONUS if the object ends up in the bin
+  carried   +CARRY_BONUS if the object is still in the hand at the release point
   neighbour -NEIGHBOUR_PENALTY per other object nudged (moved > 1 cm / tilted > 10 deg) during the pick,
             again if it tips over
   target    -TARGET_PENALTY if the target itself tips over / falls before it was lifted
@@ -31,7 +32,7 @@ from homehand.rl.residual import ACT_DIM, ACTIVE_PHASES, OBS_DIM, apply_residual
 LIFT_FULL = 0.05
 LIFT_W = 2.0
 LIFTED_BONUS = 3.0
-BIN_BONUS = 10.0
+CARRY_BONUS = 10.0
 NEIGHBOUR_PENALTY = 5.0
 TARGET_PENALTY = 5.0
 FORCE_FREE = 40.0
@@ -76,7 +77,8 @@ class ResidualPickEnv(gym.Env):
             n += 1
 
     def _over(self) -> bool:
-        return self.skill.done or self.env_done or self.env.safety.stats.protective_stop
+        return (self.skill.done or self.skill.phase == "drop" or self.env_done
+                or self.env.safety.stats.protective_stop)
 
     # ------------------------------------------------------------------ gym API
     def reset(self, *, seed: int | None = None, options: dict | None = None):
@@ -88,7 +90,7 @@ class ResidualPickEnv(gym.Env):
             self.obs = self.env.reset("tidy_table", seed=ep_seed, randomization=self.randomization)
             self.planner.reset(self.obs)
             self.env_done = False
-            skip, picks = int(self.rng.integers(0, 2)), 0
+            skip, picks = int(self.rng.random() < 0.25), 0
             while not self.env_done and not self.planner.done:
                 a = self.planner.act(self.obs)          # starts the next pick when it chooses an object
                 if self.planner.state == "execute" and self.skill.steps == 1:
@@ -113,7 +115,7 @@ class ResidualPickEnv(gym.Env):
 
     def step(self, a):
         a = np.clip(np.asarray(a, np.float32), -1.0, 1.0)
-        terms = dict.fromkeys(("lift", "lifted", "binned", "neighbour", "target", "force", "action", "stop"), 0.0)
+        terms = dict.fromkeys(("lift", "lifted", "carried", "neighbour", "target", "force", "action", "stop"), 0.0)
         phase_was = self.skill.phase
         base = self.skill.act(self.obs)
         self._step_env(apply_residual(base, self.skill.side, a))
@@ -146,14 +148,9 @@ class ResidualPickEnv(gym.Env):
         if stop:
             terms["stop"] = -STOP_PENALTY
         over = self._over() or failed
-        if over and not stop:
-            for _ in range(30):                     # let a dropped object land before judging
-                if self.env_done:
-                    break
-                self.obs, self.env_done = self.env.step(self.skill.act(self.obs) if not self.skill.done
-                                                        else self.env.last_action)
-            terms["binned"] = BIN_BONUS if self.env.in_bin(self.target) and not tr.in_hand else 0.0
+        if over and not stop and self.skill.phase == "drop" and tr.in_hand:
+            terms["carried"] = CARRY_BONUS
         truncated = not over and self.agent_steps >= MAX_AGENT_STEPS
-        info = {"terms": terms, "binned": terms["binned"] > 0, "object": self.target}
+        info = {"terms": terms, "carried": terms["carried"] > 0, "object": self.target}
         obs = residual_obs(self.obs, self.skill, self.prev) if not over else np.zeros(OBS_DIM, np.float32)
         return obs, float(sum(terms.values())), bool(over), bool(truncated), info
