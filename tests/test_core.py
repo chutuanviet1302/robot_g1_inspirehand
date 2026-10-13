@@ -374,6 +374,56 @@ def test_conveyor_carries_objects_at_belt_speed():
     assert np.linalg.norm(env.object_pose("meat_can")[0][:2] - p0[:2]) < 0.002    # (it settles ~4 mm onto the belt)
 
 
+def test_pose6d_from_one_view_and_tracking():
+    """ICP pose from oracle masks: the right rest pose and ADD-S < 7 mm for every object of a static belt scene;
+    the tracker then predicts where an object on the running belt will be."""
+    if not _can_render():
+        pytest.skip("no OpenGL context available")
+    _conveyor_scene()
+    from homehand.env.conveyor_env import BELT_Z, ConveyorEnv
+    from homehand.perception.camera import HeadCamera
+    from homehand.perception.detector import make_detector
+    from homehand.perception.pose6d import estimate_pose, pose_errors, quat2mat
+    env = ConveyorEnv()
+    cam, det, cache = HeadCamera(env), make_detector("oracle", env), {}
+    env.reset(seed=2, speed=0.0)
+    for _ in range(10):
+        env.step(env.home_ctrl)
+    frame = cam.capture(with_seg=True)
+    rests = {n: r for n, *_, r in env.layout}
+    dets = det.detect(frame)
+    assert len(dets) == 4
+    for d in dets:
+        est = estimate_pose(d, frame, env.model, env.obj_info, BELT_Z, cache)
+        p, q = env.object_pose(d.name)
+        assert est.rest == rests[d.name]
+        assert pose_errors(cache[d.name], est.R, est.pos, quat2mat(q), p)["add_s"] < 0.007
+    # tracking on the running belt (the perception pipeline: no fits at the image edge, refits when lost)
+    from homehand.perception.conveyor_perception import ConveyorPerception
+    per = ConveyorPerception(env, "oracle")
+    env.reset(seed=3, speed=0.04, objects=["meat_can", "sugar_box"])
+    per.reset((0.0, 0.04))
+    checked = 0
+    for k in range(400):
+        env.step(env.home_ctrl)
+        if k % 5 == 0:
+            per.update(env.t * 0.04)
+            for n, tr in per.tracks.items():
+                p, q = env.object_pose(n)
+                centre = quat2mat(q) @ per.cache[n].mean(0) + p     # (a symmetric object's body origin is not
+                if -0.36 < centre[1] < -0.10:                        # observable: compare the centroids)
+                    pred = tr.predict(env.t * 0.04)
+                    assert pred.rest == rests_of(env)[n]
+                    assert np.linalg.norm(pred.centre[:2] - centre[:2]) < 0.02
+                    assert abs(tr.velocity[1] - 0.04) < 0.006
+                    checked += 1
+    assert checked > 20
+
+
+def rests_of(env) -> dict:
+    return {n: r for n, *_, r in env.layout}
+
+
 def test_grip_env_reward_terms():
     pytest.importorskip("gymnasium")
     from homehand import paths
