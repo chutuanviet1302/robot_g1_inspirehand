@@ -59,6 +59,7 @@ class ConveyorPlanner:
         self.skipped: set[str] = set()
         self.drops = {s: 0 for s in spec.SIDES}
         self.log: list[dict] = []
+        self.rejects: dict = {}                    # (object, side, reason) -> count, why candidates failed
         self.done_flag = False
 
     @property
@@ -108,16 +109,18 @@ class ConveyorPlanner:
             probe = ConveyorPickSkill.__new__(ConveyorPickSkill)
             probe.top, probe.target, probe.support_z = p["approach"] == "top", tg, self.perception.support_z
             pre, hover = probe._pre(p), probe._hover(p)
-            ok = True
-            for pos in (p["grasp"], pre, hover):
+            bad = None
+            for what, pos in (("grasp", p["grasp"]), ("pre", pre), ("hover", hover)):
                 q, err = self.ik.solve(self.ik.q_work, {side: (pos, p["quat"])}, iters=120)
                 if err[side] > IK_TOL:
-                    ok = False
+                    bad = what
                     break
-            if not ok:
+            if bad is None and now + self._reach_steps(side, hover, p["quat"]) * spec.CONTROL_DT > t_sync:
+                bad = "time"                                  # the arm cannot be there in time
+            if bad is not None:
+                key = (name, side, bad)
+                self.rejects[key] = self.rejects.get(key, 0) + 1
                 continue
-            if now + self._reach_steps(side, hover, p["quat"]) * spec.CONTROL_DT > t_sync:
-                continue                                      # the arm cannot be there in time
             return float(t_sync)
         return None
 
@@ -179,7 +182,7 @@ class ConveyorPlanner:
             if sk.done:
                 self.log.append({"t": obs["t"], "event": "skill_done", "object": sk.name, "side": side,
                                  "status": "placed" if sk.placed else sk.status})
-                if sk.status == "empty_grasp":
+                if sk.status in ("empty_grasp", "aborted"):      # free for another try
                     self.taken.discard(sk.name)
                 self.skills[side] = None
         busy = [s for s, sk in self.skills.items() if sk is not None]

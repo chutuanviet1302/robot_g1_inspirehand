@@ -148,11 +148,16 @@ def estimate_pose(det: Detection, frame: Frame, model: mujoco.MjModel, obj_info:
     pts = _model(cache, model, det.name)
     height = float(obj_info[det.name]["height"])
     cands = []
-    for rest in [est.rest] + [r for r in rest_options(det.name) if r != est.rest]:
-        for k in range(4):
-            p0, q0 = body_pose_for(det.name, rest, est.pos[0], est.pos[1], est.yaw + k * np.pi / 2, height, support_z)
+    rests = rest_options(det.name)
+    # an object with a single rest pose never lies upside down: no flipped guesses, finer yaw steps instead (the
+    # flipped banana fitted its visible side about as well, 3 cm and 30 deg off)
+    flips, n_yaw = ((False, True), 4) if len(rests) > 1 else ((False,), 8)
+    for rest in [est.rest] + [r for r in rests if r != est.rest]:
+        for k in range(n_yaw):
+            p0, q0 = body_pose_for(det.name, rest, est.pos[0], est.pos[1], est.yaw + k * 2 * np.pi / n_yaw, height,
+                                   support_z)
             R0 = quat2mat(q0)
-            for flip in (False, True):
+            for flip in flips:
                 Ri = R0 @ rot([1, 0, 0], np.pi) if flip else R0
                 ti = np.asarray(p0, float) + (R0 - Ri) @ pts.mean(0)      # flip about the model's centroid
                 R, t, rmse, inl = icp(obs, pts, Ri, ti, frame.cam_pos, iters=6)

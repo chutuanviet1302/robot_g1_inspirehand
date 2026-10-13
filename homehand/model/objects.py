@@ -60,7 +60,9 @@ EXTRA_OBJECTS: dict[str, ObjectSpec] = {
     ]
 }
 OBJECTS: dict[str, ObjectSpec] = {**TIDY_OBJECTS, **EXTRA_OBJECTS}   # every object, for looking one up by name
-CONVEYOR_NAMES = ["soup_can", "foam_brick", "apple", "banana", "gelatin_box"]
+# the conveyor's objects: the ones the hand takes best off the running belt (single-object trials at 3 cm/s:
+# banana 6/6, foam brick 6/6, apple 5/6, soup can 5/6; the 3 cm flat gelatin box 3/6 with any grasp, left out)
+CONVEYOR_NAMES = ["soup_can", "foam_brick", "apple", "banana"]
 
 # ------------------------------------------------------------------ rest poses
 # "upright": as in the YCB frame (object z up). "lying": tipped over onto its broadest stable side. For each
@@ -83,6 +85,11 @@ LYING = {
 # rest poses an object takes (default both); "lying" = resting as scanned, grasped from above, for the objects that
 # take only that one
 REST_OPTIONS = {"apple": ("lying",), "foam_brick": ("lying",), "banana": ("lying",), "gelatin_box": ("lying",)}
+
+
+# objects whose grasp from above works turned by a multiple of this angle about the vertical too (0: any angle - round);
+# the grasp then takes the turn the arm reaches best
+TOP_SYMMETRY = {"apple": 0.0, "foam_brick": np.pi / 2}
 
 
 def rest_options(name: str) -> tuple[str, ...]:

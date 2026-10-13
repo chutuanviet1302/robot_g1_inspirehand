@@ -39,6 +39,9 @@ MAX_REPLANS = 2
 SYNC_IK_ITERS = 25
 SIDE_EXTRA_BACK = 0.03     # m: side grasps start their approach this much further behind the object
 HOVER_ABOVE_TOP = 0.08     # m: palm height above an upright object's top where a side grasp's descent starts
+MAX_SYNC_STEPS = 2 * SYNC_TOTAL   # a synced path longer than this, or off its targets by more than SYNC_IK_TOL,
+SYNC_IK_TOL = 0.02                # aborts the pick (the object rode out of reach: the stretched descent followed a can
+                                  # for 24 s across the zone and the arm finally flew up out of the workspace)
 DROP_RIM = 0.90            # m: release as above a rim this high (the bins' is 0.75: the objects drop into the deep bin)
 
 
@@ -113,7 +116,7 @@ class ConveyorPickSkill:
         be executed in the time the moving object leaves)."""
         counts = dict(PHASES) if self.sync is None else dict(self.counts)
         for _ in range(2):
-            plan = self._solve_sync(q0, t0, start, counts)
+            plan, err = self._solve_sync(q0, t0, start, counts)
             idx = self.ik.arm_qadr[self.side]
             qs = np.array([q0] + [s[3] for s in plan])
             dq = np.abs(np.diff(qs[:, idx], axis=0)).max(axis=1)
@@ -128,9 +131,11 @@ class ConveyorPickSkill:
                     counts[phase] = int(np.ceil(counts[phase] * min(g, 3.0)))
         self.counts = counts
         self.sync = (self.sync[:start] if self.sync else []) + plan
+        if len(self.sync) > MAX_SYNC_STEPS or err > SYNC_IK_TOL:
+            self.status = "aborted"
 
     def _solve_sync(self, q0: np.ndarray, t0: float, start: int, counts: dict) -> list:
-        plan, q, i = [], q0.copy(), 0
+        plan, q, i, worst = [], q0.copy(), 0, 0.0
         other = self.ik.arm_qadr["right" if self.side == "left" else "left"]
         for phase, _ in PHASES:
             n = counts[phase]
@@ -146,11 +151,12 @@ class ConveyorPickSkill:
                            "close": p["grasp"], "lift": p["grasp"] + np.array([0.0, 0.0, LIFT_H * u])}[phase]
                     # consecutive targets are millimetres apart: a few warm-started iterations converge (each one is
                     # a QP with the collision constraints: 100 of them per step made one plan take minutes)
-                    q, _ = self.ik.solve(q, {self.side: (pos, p["quat"])}, iters=SYNC_IK_ITERS)
+                    q, err = self.ik.solve(q, {self.side: (pos, p["quat"])}, iters=SYNC_IK_ITERS)
+                    worst = max(worst, err[self.side])
                     q[other] = q0[other]
                     plan.append((phase, k, n, q.copy(), tg.pos[:2].copy()))
                 i += 1
-        return plan
+        return plan, worst
 
     # ------------------------------------------------------------------ execution
     @property
@@ -186,6 +192,8 @@ class ConveyorPickSkill:
             if self.k >= len(self.reach):
                 self._plan_sync(self.q, t + spec.CONTROL_DT, 0)
                 self.k = 0
+                if self.status == "aborted":
+                    self._start_carry()
             return compose_action(self.ik, self.q, self.hand_cmd)
         phase, k, n, q, planned_c = self.sync[self.k]
         if phase in ("descend", "approach") and obs["t"] % CHECK_EVERY == 0:
@@ -193,6 +201,9 @@ class ConveyorPickSkill:
             if np.linalg.norm(now_c - planned_c) > REPLAN_TOL and self.replans < MAX_REPLANS:   # not where planned
                 self._plan_sync(self.q, t, self.k)
                 self.replans += 1
+                if self.status == "aborted":
+                    self._start_carry()
+                    return compose_action(self.ik, self.q, self.hand_cmd)
                 phase, k, n, q, planned_c = self.sync[self.k]
         self.q = q.copy()
         if phase == "close":
@@ -213,14 +224,15 @@ class ConveyorPickSkill:
         t_end = self.t_sync + len(self.sync) * spec.CONTROL_DT
         obstacles = self.others(t_end) if self.others else None
         sk = PickPlaceSkill(self.ik, self.side, tg, self.q, self.hand_cmd, obstacles=obstacles)
-        keep = ("return",) if self.status == "empty_grasp" else ("transport", "drop", "retreat", "return")
+        empty = self.status in ("empty_grasp", "aborted")
+        keep = ("return",) if empty else ("transport", "drop", "retreat", "return")
         sk.plan = [s for s in sk.plan if s.name in keep]
         for seg in sk.plan:
             # the palm follows a Cartesian path to the bin: interpolating the joints from the lifted pose to the
             # drop pose dipped the hand 15 cm, the fingers onto the belt
             if seg.name == "transport":
                 seg.joint_space = False
-        if self.status == "empty_grasp":
+        if empty:
             sk.hand_cmd[self.side] = np.array(RELAXED_HAND, float)
         sk.q = self.q.copy()
         sk._start()

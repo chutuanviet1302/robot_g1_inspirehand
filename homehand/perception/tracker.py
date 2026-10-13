@@ -16,6 +16,9 @@ from homehand.perception.pose6d import Pose6D
 
 POS_STD = 0.004          # m, measurement noise of the fitted centroid
 ACC_STD = 0.01           # m/s^2, process noise (the belt runs at a constant speed)
+# m/s: the belt's speed is known (its drive), objects on it move at that speed: a loose prior let one bad fit (the
+# banana's, 3 cm off) swing the velocity by 1 cm/s, the aim 5 cm off at a grasp 5 s ahead
+VEL_PRIOR_STD = 0.003
 MIN_INLIERS = 0.6        # fits matching fewer observed points (an object half in view, occluded) are not used
 
 
@@ -71,6 +74,7 @@ class Tracker:
             if tr is None:
                 tr = Track(pose.name, pose, t)
                 tr.x = np.array([*pose.centre[:2], *self.prior_velocity])
+                tr.P = np.diag([POS_STD ** 2] * 2 + [VEL_PRIOR_STD ** 2] * 2)
                 tr.n_updates = 1
                 self.tracks[pose.name] = tr
             else:

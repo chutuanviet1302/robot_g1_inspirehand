@@ -23,7 +23,7 @@ from homehand.control.ik import ArmIK
 from homehand.control.safety import ARM_MAX_VEL
 from homehand.env.kitchen_env import BIN_WALL_TOP, BIN_XY, TABLE_Z
 from homehand.model import spec
-from homehand.model.objects import OBJECTS, grasp_geometry, lying_dims
+from homehand.model.objects import OBJECTS, TOP_SYMMETRY, grasp_geometry, lying_dims
 
 REACH_SPEED = 0.35          # m/s, peak palm speed of a free-space move
 FINE_SPEED = 0.15
@@ -150,6 +150,16 @@ _TOP_PREF_Y = (0.13, 0.27)
 _TOP_PREF_YAW = np.deg2rad((15.0, -20.0))
 
 
+def top_pref_yaw(side: str, y: float) -> float:
+    """The palm-down wrist yaw the arm reaches best at lateral position y."""
+    v = float(np.interp(abs(y), _TOP_PREF_Y, _TOP_PREF_YAW))
+    return v if side == "right" else -v
+
+
+def _wrap_half(a: float) -> float:
+    return float((a + np.pi / 2) % np.pi - np.pi / 2)
+
+
 def palm_down_quat(side: str, yaw: float) -> np.ndarray:
     """Palm-site orientation with the palm facing down, fingers along `yaw`, thumb towards the midline."""
     a = -np.pi / 2 if side == "right" else np.pi / 2
@@ -188,7 +198,15 @@ def top_grasp_plan(side: str, target: Target) -> dict:
     dims = lying_dims(target.name)
     thumb_heading = target.yaw if gt.align == "along" else target.yaw + np.pi / 2
     # fingers perpendicular to the thumb, pointing away from the robot ((-90, 90] deg): the only way it reaches
-    yaw = float((thumb_heading - np.pi / 2 + np.pi / 2) % np.pi - np.pi / 2)
+    yaw = _wrap_half(thumb_heading - np.pi / 2)
+    step = TOP_SYMMETRY.get(target.name)
+    if step is not None:                   # an equivalent turn of the grasp: the one nearest the arm's best yaw
+        pref = top_pref_yaw(side, float(target.pos[1]))
+        if step == 0.0:
+            yaw = pref
+        else:
+            yaw = min((_wrap_half(yaw + k * step) for k in range(int(round(np.pi / step)))),
+                      key=lambda a: abs(_wrap_half(a - pref)))
     q = top_hand_quat(side, yaw, np.deg2rad(gt.tilt_deg))
     centre = np.array([target.pos[0], target.pos[1], TABLE_Z + dims["thick"] / 2])
     dx, dy, dz = gt.obj_in_palm

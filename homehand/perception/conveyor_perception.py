@@ -19,6 +19,9 @@ from homehand.perception.pose6d import Pose6D, _result, estimate_pose, model_poi
 from homehand.perception.tracker import MIN_INLIERS, Tracker
 
 BORDER = 4          # px: masks closer than this to the image edge are objects partly out of view
+# every FULL_EVERY-th look at a tracked object, the full search runs too and the better fit is kept: tracking ICP
+# from the prediction alone got stuck 3 cm off along the banana (a long, gently curved object seen from one side)
+FULL_EVERY = 5
 
 
 class ConveyorPerception:
@@ -37,7 +40,7 @@ class ConveyorPerception:
 
     def reset(self, prior_velocity=(0.0, 0.0)) -> None:
         self.tracker = Tracker(prior_velocity)
-        self.stats = {"frames": 0, "full_fits": 0, "refits": 0, "skipped_border": 0, "rejected": 0}
+        self.stats = {"frames": 0, "full_fits": 0, "refits": 0, "skipped_border": 0, "rejected": 0, "replaced": 0}
 
     @property
     def tracks(self):
@@ -68,6 +71,12 @@ class ConveyorPerception:
             track = self.tracker.tracks.get(d.name)
             if track is not None:
                 fit = refine_pose(track.predict(t), d, frame, self.env.model, self.support_z, self.cache)
+                if fit is not None and fit.inliers >= MIN_INLIERS and track.n_updates % FULL_EVERY == 0:
+                    full = estimate_pose(d, frame, self.env.model, self.env.obj_info, self.support_z, self.cache)
+                    self.stats["full_fits"] += 1
+                    if full is not None and _score(full) < _score(fit) - 1e-4:
+                        fit = full
+                        self.stats["replaced"] += 1
             if fit is None or fit.inliers < MIN_INLIERS:
                 if track is not None:
                     self.stats["refits"] += 1
@@ -79,3 +88,8 @@ class ConveyorPerception:
                 continue
             fits.append(fit)
         self.tracker.update(fits, t)
+
+
+def _score(fit) -> float:
+    """Fit quality as in the full search (lower is better)."""
+    return fit.rmse - 0.002 * fit.inliers
