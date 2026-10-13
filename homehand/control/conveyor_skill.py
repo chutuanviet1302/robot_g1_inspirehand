@@ -41,6 +41,14 @@ SIDE_EXTRA_BACK = 0.03     # m: side grasps start their approach this much furth
 HOVER_ABOVE_TOP = 0.08     # m: palm height above an upright object's top where a side grasp's descent starts
 
 
+def _along(path: np.ndarray, u: float) -> np.ndarray:
+    """The joint configuration a fraction u along a sampled path, linearly interpolated between its samples (taking
+    the nearest sample made the arm move in steps: 50-67 rad/s^2 joint acceleration peaks during the reach)."""
+    x = float(np.clip(u, 0.0, 1.0)) * (len(path) - 1)
+    i = min(int(x), len(path) - 2)
+    return path[i] + (path[i + 1] - path[i]) * (x - i)
+
+
 def target_from_pose(pose, obj_info: dict, support_z: float) -> Target:
     """The grasp library's view of a 6-D pose: footprint centre, heading, height, rest pose."""
     h = lying_dims(pose.name)["thick"] if pose.rest == "lying" else float(obj_info[pose.name]["height"])
@@ -71,7 +79,7 @@ class ConveyorPickSkill:
         self.closed = np.asarray(self.grasp_type.closed_cmd(), float)
         n = max(10, int(round((t_sync - now) / spec.CONTROL_DT)))
         path = ik.plan_joint_path(self.q, side, [(self._hover(p), p["quat"])])
-        self.reach = [path[min(len(path) - 1, int(min_jerk((i + 1) / n) * (len(path) - 1) + 0.5))] for i in range(n)]
+        self.reach = [_along(path, min_jerk((i + 1) / n)) for i in range(n)]
         self.hand_from = self.hand_cmd[side].copy()
         self.k = 0                                    # step within reach, then within the synced path
         self.sync = None                              # [(phase, k, n, q, planned object centre xy)] per synced step

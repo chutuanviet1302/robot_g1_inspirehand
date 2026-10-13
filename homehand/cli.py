@@ -76,7 +76,10 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
          randomization: str = "nominal",
          belt_speed: float = typer.Option(0.03, help="conveyor: belt speed in m/s (0 = stopped)"),
          objects: int = typer.Option(4, help="conveyor: objects per episode (1-4)"),
-         gap: str = typer.Option("0.25,0.35", help="conveyor: min,max metres between objects on the belt")):
+         gap: str = typer.Option("0.25,0.35", help="conveyor: min,max metres between objects on the belt"),
+         replay: bool = typer.Option(None, "--replay/--live",
+                                     help="simulate each episode first, then play it back smoothly (default for the "
+                                          "conveyor: live viewing stalls while the controller plans)")):
     """Open the native MuJoCo viewer and watch the robot tidy the counter (orbit with the mouse)."""
     import time
 
@@ -105,10 +108,35 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
             from homehand.policy.skill import load_policy
             policy = load_policy(controller)
         planner = TidyPlanner(env, perception=perception, policy=policy)
+    if replay is None:
+        replay = task == "conveyor"
     with mujoco.viewer.launch_passive(env.model, env.data) as v:
         v.cam.lookat[:] = (0.38, 0.0, 0.9)
         v.cam.distance, v.cam.azimuth, v.cam.elevation = 1.5, 150, -22
-        while v.is_running():
+        while replay and v.is_running():
+            from homehand.replay import simulate_in_subprocess
+            typer.echo(f"seed {seed}: simulating ...")
+            r = simulate_in_subprocess({"task": task, "seed": seed, "randomization": randomization,
+                                        "perception": perception, "reset_kw": reset_kw})
+            typer.echo(f"  objects {r['objects']} -> {r['outcome']} {r['object_outcomes']} (playing back)")
+            t_wall = time.perf_counter()
+            for q in r["qpos"]:
+                if not v.is_running():
+                    break
+                with v.lock():
+                    env.data.qpos[:] = q
+                    mujoco.mj_forward(env.model, env.data)
+                v.sync()
+                t_wall += spec.CONTROL_DT / speed
+                if (delay := t_wall - time.perf_counter()) > 0:
+                    time.sleep(delay)
+            if not loop:
+                typer.echo("episode finished; close the window to exit")
+                while v.is_running():
+                    time.sleep(0.2)
+                break
+            seed += 1
+        while not replay and v.is_running():
             with v.lock():
                 obs = env.reset(task, seed=seed, randomization=randomization, **reset_kw)
                 planner.reset(obs)
