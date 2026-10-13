@@ -308,9 +308,9 @@ def build_bimanual_scene(out_dir=None) -> None:
 # the objects either way, and friction only sees velocities).
 BELT_X, BELT_HALF_W, BELT_HALF_L, BELT_THICK = 0.355, 0.10, 0.55, 0.002   # (the palm-down hand reaches lying objects up to x ~0.37)
 BELT_PERIOD = 0.6
-CONVEYOR_BINS = {"left": (0.15, 0.47), "right": (0.15, -0.47)}   # bin centres (clear of the belt and of the elbows)
+CONVEYOR_BINS = {"left": (0.13, 0.47), "right": (0.13, -0.47)}   # bin centres (clear of the belt and of the elbows)
 CONVEYOR_BIN_Z = 0.65                                             # bin floor: its rim (0.75) passes under the elbows
-CONVEYOR_BIN_HALF = (0.09, 0.10)                                  # inner half size; walls 10 cm high, as the tidy bin
+CONVEYOR_BIN_HALF = (0.12, 0.12)    # inner half size (a 19 cm bottle lying fits); walls 10 cm high, as the tidy bin
 
 
 def build_conveyor_scene(out_dir=None) -> None:

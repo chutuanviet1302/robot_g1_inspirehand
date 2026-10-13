@@ -31,7 +31,7 @@ from homehand.model.objects import CLASS_NAMES, OBJECTS, body_pose_for, lying_di
 BELT_Z = TABLE_Z + 0.0005 + BELT_THICK  # belt surface
 Y_SPAWN = BELT_HALF_L - 0.10            # objects appear at y = -Y_SPAWN (a 19 cm object lying along the belt fits)
 Y_MISS = 0.45                           # ... and are taken off at y = +Y_MISS
-GAP = (0.22, 0.32)                      # m between consecutive objects along the belt
+GAP = (0.40, 0.55)                      # m between consecutive objects along the belt (13-18 s at 3 cm/s: one pick)
 P_LYING = 0.5
 SPAWN_X = BELT_X                         # footprint centre across the belt
 X_JITTER = 0.01

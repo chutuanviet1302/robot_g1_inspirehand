@@ -32,7 +32,7 @@ PHASES = (("descend", 12), ("approach", 12), ("close", 18), ("lift", 15))   # mi
 SYNC_TOTAL = 90            # control steps the planner budgets for the synced phases (they stretch to the joint limits)
 HOVER_H = 0.06             # m above the pre-grasp pose where the reach ends (a short, slow descent in sync)
 JOINT_FRAC = 0.8           # of the safety layer's joint speed limit, per synced step
-LIFT_H = 0.10
+LIFT_H = 0.18              # m: the carried object clears the others on the belt before the arm swings to its bin
 REPLAN_TOL = 0.01          # m between the current prediction and the one the synced path was planned on
 CHECK_EVERY = 5            # control steps (the perception rate)
 MAX_REPLANS = 2
@@ -50,8 +50,11 @@ def target_from_pose(pose, obj_info: dict, support_z: float) -> Target:
 
 class ConveyorPickSkill:
     def __init__(self, ik: ArmIK, side: str, name: str, predict, q_start: np.ndarray, hand_cmd: dict,
-                 now: float, t_sync: float, belt_velocity, obj_info: dict, support_z: float, drop_xy=None):
-        """`predict(t)` -> the tracker's Pose6D of the object at time t (seconds)."""
+                 now: float, t_sync: float, belt_velocity, obj_info: dict, support_z: float, drop_xy=None,
+                 others=None):
+        """`predict(t)` -> the tracker's Pose6D of the object at time t (seconds); `others(t)` -> the Targets of the
+        other objects on the belt at time t (obstacles for the carry)."""
+        self.others = others
         self.ik, self.side, self.name, self.predict = ik, side, name, predict
         self.obj_info, self.support_z, self.drop_xy = obj_info, support_z, drop_xy
         self.q = q_start.copy()
@@ -197,7 +200,9 @@ class ConveyorPickSkill:
         """The tidy-table skill's remaining phases from here: transport, drop, retreat, return (or just return
         after an empty grasp)."""
         tg = self.target = self._target(self.t_sync + len(self.sync) * spec.CONTROL_DT)
-        sk = PickPlaceSkill(self.ik, self.side, tg, self.q, self.hand_cmd)
+        t_end = self.t_sync + len(self.sync) * spec.CONTROL_DT
+        obstacles = self.others(t_end) if self.others else None
+        sk = PickPlaceSkill(self.ik, self.side, tg, self.q, self.hand_cmd, obstacles=obstacles)
         keep = ("return",) if self.status == "empty_grasp" else ("transport", "drop", "retreat", "return")
         sk.plan = [s for s in sk.plan if s.name in keep]
         if self.status == "empty_grasp":

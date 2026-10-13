@@ -132,6 +132,11 @@ class ConveyorPlanner:
                     best = (t_sync, name, side)
         return best
 
+    def _others(self, name: str, t: float) -> list:
+        """The other tracked objects (predicted at time t) as obstacles."""
+        return [target_from_pose(tr.predict(t), self.env.obj_info, self.perception.support_z)
+                for n, tr in self.perception.tracks.items() if n != name and n not in self.taken]
+
     # ------------------------------------------------------------------ loop
     def act(self, obs: dict) -> np.ndarray:
         t = obs["t"] * spec.CONTROL_DT
@@ -158,7 +163,8 @@ class ConveyorPlanner:
             drop = np.array([bx + dx, by - np.sign(by) * din])
             self.drops[side] += 1
             self.skill = ConveyorPickSkill(self.ik, side, name, track.predict, self.q, self.hand_cmd, t, t_sync,
-                                           track.velocity, self.env.obj_info, self.perception.support_z, drop)
+                                           track.velocity, self.env.obj_info, self.perception.support_z, drop,
+                                           others=lambda tt, name=name: self._others(name, tt))
             self.taken.add(name)
             self.log.append({"t": obs["t"], "event": "pick", "object": name, "side": side,
                              "t_sync": round(t_sync, 2), "rest": tg.rest})
