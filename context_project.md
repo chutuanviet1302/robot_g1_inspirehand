@@ -233,10 +233,10 @@ knocked_over / dropped, dù từng cú nắm riêng lẻ gần như luôn thành
 ACT ngang expert ở mọi mức (CI chồng nhau). Diffusion kém rõ và là controller duy nhất hay bị dừng an toàn (lực > 80 N).
 Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên máy Linux.
 
-## 6. Trạng thái (2026-10-10 sáng)
+## 6. Trạng thái (2026-10-13)
 
 - Pipeline đầy đủ đã chạy xong trên Windows (03:02), không lỗi. `data/` + `models/` trên máy Windows (không trong git).
-- Thay đổi phiên 5 được commit vào nhánh `windows-port` (chưa push, chưa merge vào `main`).
+- Thay đổi phiên 5–7 đã merge vào `main` (phiên 7: PR #2, nhánh `expert-reliability`).
 
 ## 7. Việc còn lại
 
@@ -244,7 +244,6 @@ Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên má
 - Build + chạy thử Docker ROS 2 (`docker compose build ros && docker compose run --rm ros`).
 - RL có kết quả dương: hành động chống lật khi đặt hộp; hoặc residual dưới nhiễu mạnh hơn (ma sát ×0.5).
 - SmolVLA ≥ 20k bước trên Kaggle (bạn chạy).
-- Nhánh `expert-reliability` chưa push / chưa merge vào `main`.
 
 1. Giảm knocked_over/dropped của expert trong cảnh đầy đủ (vd. chừa khoảng cách khi tay đi ngang vật bên cạnh,
    thứ tự gắp theo nguy cơ va chạm) — grasp riêng lẻ đã ~99%.
