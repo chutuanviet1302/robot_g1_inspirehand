@@ -21,7 +21,7 @@ from collections import defaultdict
 import numpy as np
 
 from homehand.env.kitchen_env import SPAWN_ZONES
-from homehand.model.objects import OBJECTS
+from homehand.model.objects import OBJECTS, TIDY_OBJECTS
 
 _W: dict = {}
 
@@ -102,7 +102,7 @@ def run_trial(trial: tuple) -> dict:
 def run_bench(objects: list[str] | None = None, n_yaw: int = 6, workers: int | None = None,
               seed: int = 0, progress=None, rests=("upright", "lying")) -> list[dict]:
     from homehand.resources import safe_workers
-    todo = trials(objects or list(OBJECTS), n_yaw, seed, rests)
+    todo = trials(objects or list(TIDY_OBJECTS), n_yaw, seed, rests)
     n = safe_workers(workers)
     results = []
     ctx = mp.get_context("spawn")

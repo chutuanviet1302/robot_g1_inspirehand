@@ -82,4 +82,7 @@ GRASPS: dict[str, GraspType] = {
 
 # grasp for each object when it lies on its side (upright objects use ObjectSpec.grasp)
 LYING_GRASP = {"soup_can": "lying_can_wrap", "mustard": "lying_bottle_wrap", "sugar_box": "flat_box_claw",
-               "meat_can": "lying_block_pinch"}
+               "meat_can": "lying_block_pinch",
+               # conveyor objects (they only ever lie): the banana like a lying can, the gelatin box like the sugar box
+               "banana": "lying_can_wrap", "gelatin_box": "lying_block_pinch",
+               "apple": "lying_can_wrap", "foam_brick": "lying_block_pinch"}

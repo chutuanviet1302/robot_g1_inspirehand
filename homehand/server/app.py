@@ -106,7 +106,7 @@ def create_app() -> FastAPI:
     @app.get("/api/config")
     def config():
         from homehand.control.grasps import GRASPS, LYING_GRASP
-        from homehand.model.objects import OBJECTS
+        from homehand.model.objects import TIDY_OBJECTS as OBJECTS
         from homehand.perception.detector import YOLO_WEIGHTS
 
         perception = [{"id": "auto", "label": "Auto (YOLO if trained)"},

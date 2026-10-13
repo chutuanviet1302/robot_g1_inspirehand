@@ -27,9 +27,9 @@ from homehand.perception.conveyor_perception import ConveyorPerception
 
 PERCEIVE_EVERY = 5                      # control steps (5 Hz)
 ZONE = (0.10, 0.36)                     # |y| of each hand's pick zone (the G1 reaches |y| <= 0.38, not the chest)
-# each hand drops into the bin at its own hip, on its inner half (the arm reaches |y| ~0.45 there); successive drops
+# each hand drops into the bin at its own hip, on its inner half (the palm-down hand releases up to |y| ~0.35); successive drops
 # take these spots in turn: (x offset, offset towards the body's midline) from the bin's centre
-DROP_OFFSETS = ((0.0, 0.04), (0.04, 0.03), (-0.04, 0.03), (0.0, 0.0))
+DROP_OFFSETS = ((0.0, 0.06), (0.05, 0.05), (-0.05, 0.05), (0.0, 0.04))
 MIN_REACH_STEPS = 12
 IK_TOL = 0.01
 SCAN = 0.25                             # s between candidate synchronisation times

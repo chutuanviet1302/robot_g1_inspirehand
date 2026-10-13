@@ -7,7 +7,7 @@ from collections import Counter
 
 from homehand.control.grasps import GRASPS
 from homehand.env.kitchen_env import OUTCOMES
-from homehand.model.objects import OBJECTS
+from homehand.model.objects import OBJECTS, TIDY_OBJECTS
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> dict:
@@ -30,7 +30,7 @@ def summarize(episodes: list[dict]) -> dict:
     episode_outcomes = Counter(e["outcome"] for e in episodes)
     object_outcomes = Counter(o for e in episodes for o in e["object_outcomes"].values())
     per_object = {}
-    for name in OBJECTS:
+    for name in TIDY_OBJECTS:
         outs = [e["object_outcomes"][name] for e in episodes if name in e["object_outcomes"]]
         if outs:
             per_object[name] = {"label": OBJECTS[name].label, "grasp": GRASPS[OBJECTS[name].grasp].label,

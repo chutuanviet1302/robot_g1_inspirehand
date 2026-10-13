@@ -29,7 +29,7 @@ class ObjectSpec:
     grasp: str = "cylindrical_wrap"  # key of homehand.control.grasps.GRASPS
 
 
-OBJECTS: dict[str, ObjectSpec] = {
+TIDY_OBJECTS: dict[str, ObjectSpec] = {        # the tidy-table task's objects (its scene, detector classes)
     o.name: o
     for o in [
         ObjectSpec("soup_can", "tomato soup can", "005_tomato_soup_can", 0.35, ("cylinder", 0.034, 0.051),
@@ -42,7 +42,25 @@ OBJECTS: dict[str, ObjectSpec] = {
                    "0.2 0.35 0.75 1", half_x=0.05, half_y=0.03, box=True, grasp="tripod_pinch"),
     ]
 }
-CLASS_NAMES = list(OBJECTS)  # detector class ids follow this order
+CLASS_NAMES = list(TIDY_OBJECTS)  # detector class ids follow this order (tidy-table detector)
+
+# Objects that fit the Inspire hand better (4-8 cm across; YCB, CC BY 4.0), used by the conveyor task. YCB scans
+# the banana and the gelatin box lying flat: their YCB frame is their (only) rest pose, "lying".
+EXTRA_OBJECTS: dict[str, ObjectSpec] = {
+    o.name: o
+    for o in [
+        ObjectSpec("foam_brick", "foam brick", "061_foam_brick", 0.03, ("box", 0.0265, 0.039, 0.0255),
+                   "0.85 0.2 0.2 1", half_x=0.0265, half_y=0.039, box=True, grasp="palmar_box"),
+        ObjectSpec("apple", "apple", "013_apple", 0.07, ("sphere", 0.037),
+                   "0.8 0.1 0.1 1", half_x=0.037, half_y=0.037, grasp="cylindrical_wrap"),
+        ObjectSpec("banana", "banana", "011_banana", 0.07, ("box", 0.0545, 0.089, 0.0185),
+                   "0.95 0.85 0.2 1", half_x=0.0545, half_y=0.089, box=True, grasp="cylindrical_wrap"),
+        ObjectSpec("gelatin_box", "gelatin box", "009_gelatin_box", 0.10, ("box", 0.0445, 0.0505, 0.015),
+                   "0.9 0.3 0.4 1", half_x=0.0445, half_y=0.0505, box=True, grasp="palmar_box"),
+    ]
+}
+OBJECTS: dict[str, ObjectSpec] = {**TIDY_OBJECTS, **EXTRA_OBJECTS}   # every object, for looking one up by name
+CONVEYOR_NAMES = ["soup_can", "foam_brick", "apple", "banana", "gelatin_box"]
 
 # ------------------------------------------------------------------ rest poses
 # "upright": as in the YCB frame (object z up). "lying": tipped over onto its broadest stable side. For each
@@ -55,7 +73,20 @@ LYING = {
     "mustard": {"quat": (_S, _S, 0.0, 0.0), "axis": (0.0, 0.0, 1.0), "thickness": 0.066},    # on its broad face
     "sugar_box": {"quat": (_S, 0.0, _S, 0.0), "axis": (0.0, 0.0, 1.0), "thickness": 0.049},  # flat on the label
     "meat_can": {"quat": (_S, _S, 0.0, 0.0), "axis": (1.0, 0.0, 0.0), "thickness": 0.060},   # on its side
+    "banana": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.037},    # as scanned
+    "gelatin_box": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.030},
+    # squat objects (7 cm or lower) rest as scanned too, and are taken from above like a lying object: the side
+    # grasp's palm cannot come low enough beside them (it slipped off the top of the apple and the brick)
+    "apple": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.072},
+    "foam_brick": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.051},
 }
+# rest poses an object takes (default both); "lying" = resting as scanned, grasped from above, for the objects that
+# take only that one
+REST_OPTIONS = {"apple": ("lying",), "foam_brick": ("lying",), "banana": ("lying",), "gelatin_box": ("lying",)}
+
+
+def rest_options(name: str) -> tuple[str, ...]:
+    return REST_OPTIONS.get(name, ("upright", "lying") if name in LYING else ("upright",))
 REST_POSES = ("upright", "lying")
 
 
@@ -104,7 +135,9 @@ def rest_of(name: str, quat) -> tuple[str, float]:
     """(rest pose, yaw) of an object from its world orientation: the yaw of the object x axis when upright
     (as before), the heading of the long axis (mod pi) when lying."""
     R = _rot(quat)
-    if R[2, 2] > 0.7 or name not in LYING:
+    if rest_options(name) == ("lying",):
+        pass                                                # (its lying pose is object z up)
+    elif R[2, 2] > 0.7 or name not in LYING:
         return "upright", float(np.arctan2(R[1, 0], R[0, 0]))
     a = R @ np.asarray(LYING[name]["axis"])
     return "lying", float((np.arctan2(a[1], a[0]) + np.pi / 2) % np.pi - np.pi / 2)

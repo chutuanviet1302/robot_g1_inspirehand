@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from homehand.env.kitchen_env import TABLE_Z
-from homehand.model.objects import LYING, OBJECTS, lying_dims
+from homehand.model.objects import LYING, OBJECTS, lying_dims, rest_options
 from homehand.perception.camera import Frame, deproject
 
 
@@ -69,7 +69,7 @@ def localize(det: Detection, frame: Frame, min_points: int = 40) -> ObjectEstima
         # (soup can 6.8 vs 10.2 cm, mustard 6.6 vs 19, sugar box 4.9 vs 17.6, meat can 6.0 vs 8.4 cm).
         ld = lying_dims(det.name)
         upright_h = 2 * spec.primitive[-1]
-        if top - TABLE_Z < 0.5 * (upright_h + ld["thick"]):
+        if rest_options(det.name) == ("lying",) or top - TABLE_Z < 0.5 * (upright_h + ld["thick"]):
             th, centre = _fit_rectangle(xy, ld["length"] / 2, ld["width"] / 2, view)
             return ObjectEstimate(det.name, det.score, np.array([centre[0], centre[1], TABLE_Z]), ld["thick"],
                                   float((th + np.pi / 2) % np.pi - np.pi / 2), len(pts), det.bbox, rest="lying")

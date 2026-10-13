@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 
 from homehand import paths
 from homehand.model import spec
-from homehand.model.objects import OBJECTS
+from homehand.model.objects import TIDY_OBJECTS as OBJECTS
 
 COLORS = {"soup_can": (230, 60, 50), "mustard": (240, 200, 30), "sugar_box": (80, 160, 255), "meat_can": (90, 220, 120)}
 

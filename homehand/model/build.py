@@ -19,7 +19,7 @@ import numpy as np
 
 from homehand import paths
 from homehand.model import spec
-from homehand.model.objects import OBJECTS, ObjectSpec
+from homehand.model.objects import CONVEYOR_NAMES, OBJECTS, TIDY_OBJECTS, ObjectSpec
 from homehand.model.urdf2mjcf import build_body_tree, parse_urdf
 
 # Hands are mounted so their fingers point along the forearm (+x of the wrist link), the palms face the
@@ -273,7 +273,7 @@ def build_scene(out_dir) -> None:
     tree = ET.parse(paths.ASSETS_DIR / "scene_kitchen.xml")
     root = tree.getroot()
     asset, world = root.find("asset"), root.find("worldbody")
-    info = {name: _add_object(asset, world, obj, out_dir, k) for k, (name, obj) in enumerate(OBJECTS.items())}
+    info = {name: _add_object(asset, world, obj, out_dir, k) for k, (name, obj) in enumerate(TIDY_OBJECTS.items())}
     ET.indent(tree)
     tree.write(out_dir / paths.SCENE_XML.name)
     (out_dir / paths.OBJECTS_JSON.name).write_text(json.dumps(info, indent=2))
@@ -308,9 +308,10 @@ def build_bimanual_scene(out_dir=None) -> None:
 # the objects either way, and friction only sees velocities).
 BELT_X, BELT_HALF_W, BELT_HALF_L, BELT_THICK = 0.355, 0.10, 0.55, 0.002   # (the palm-down hand reaches lying objects up to x ~0.37)
 BELT_PERIOD = 0.6
-CONVEYOR_BINS = {"left": (0.13, 0.47), "right": (0.13, -0.47)}   # bin centres (clear of the belt and of the elbows)
-CONVEYOR_BIN_Z = 0.65                                             # bin floor: its rim (0.75) passes under the elbows
-CONVEYOR_BIN_HALF = (0.12, 0.12)    # inner half size (a 19 cm bottle lying fits); walls 10 cm high, as the tidy bin
+CONVEYOR_BINS = {"left": (0.13, 0.40), "right": (0.13, -0.40)}   # bin centres (clear of the belt and of the elbows)
+CONVEYOR_BIN_Z = 0.55                                             # bin floor: its rim (0.75) passes under the elbows
+CONVEYOR_BIN_WALL = 0.20                                          # wall height
+CONVEYOR_BIN_HALF = (0.12, 0.12)    # inner half size
 
 
 def build_conveyor_scene(out_dir=None) -> None:
@@ -318,10 +319,20 @@ def build_conveyor_scene(out_dir=None) -> None:
     tree = ET.parse(out_dir / paths.SCENE_XML.name)
     root = tree.getroot()
     world = root.find("worldbody")
-    old = next(b for b in world.findall("body") if b.get("name") == "bin")     # the tidy-table bin is not used
-    world.remove(old)
+    asset = root.find("asset")
+    for b in list(world.findall("body")):     # the tidy-table bin and the objects the conveyor does not use
+        if b.get("name") == "bin" or (b.get("name") in TIDY_OBJECTS and b.get("name") not in CONVEYOR_NAMES):
+            world.remove(b)
+    tidy = json.loads((out_dir / paths.OBJECTS_JSON.name).read_text())
+    info = {}
+    for k, name in enumerate(CONVEYOR_NAMES):
+        if name in tidy:
+            info[name] = tidy[name]
+        else:
+            info[name] = _add_object(asset, world, OBJECTS[name], out_dir, k + 6)
+    (out_dir / paths.CONVEYOR_OBJECTS_JSON.name).write_text(json.dumps(info, indent=2))
     hx, hy = CONVEYOR_BIN_HALF
-    w, h = 0.005, 0.05
+    w, h = 0.005, CONVEYOR_BIN_WALL / 2
     for side, (x, y) in CONVEYOR_BINS.items():
         b = ET.SubElement(world, "body", name=f"bin_{side}", pos=f"{x} {y} {CONVEYOR_BIN_Z}")
         ET.SubElement(b, "geom", attrib={"class": "fixture"}, pos="0 0 0.005", size=f"{hx + w} {hy + w} 0.005",

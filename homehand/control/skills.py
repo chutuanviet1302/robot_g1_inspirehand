@@ -64,10 +64,15 @@ class Target:
     max_inward_yaw: float | None = None   # set by the planner when the default wrist yaw would hit the bin
     drop_xy: np.ndarray | None = None     # where the object should land in the bin (chosen by the planner)
     rest: str = "upright"                 # "upright" | "lying" (then `yaw` is the heading of its long axis)
+    bin_top: float | None = None          # height of the bin's rim (default: the tidy-table bin)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "pos": [round(float(v), 4) for v in self.pos], "yaw": round(self.yaw, 3),
                 "height": round(self.height, 4), "rest": self.rest}
+
+
+def _bin_top(target: Target) -> float:
+    return BIN_WALL_TOP if target.bin_top is None else target.bin_top
 
 
 def min_jerk(tau: float) -> float:
@@ -198,7 +203,7 @@ def top_grasp_plan(side: str, target: Target) -> dict:
     dq = top_hand_quat(side, sgn_in * TOP_DROP_YAW, TOP_DROP_TILT)
     hx, hy, hz = gt.held_in_palm or gt.obj_in_palm
     held = _qrot(dq) @ np.array([hx, hy if side == "right" else -hy, hz])
-    obj_c = np.array([*np.asarray(obj_drop, float), BIN_WALL_TOP + TOP_DROP_CLEARANCE + dims["thick"] / 2])
+    obj_c = np.array([*np.asarray(obj_drop, float), _bin_top(target) + TOP_DROP_CLEARANCE + dims["thick"] / 2])
     drop = obj_c - held
     return {"approach": "top", "hand_yaw": yaw, "quat": q, "grasp": grasp,
             "pre": grasp + np.array([0.0, 0.0, TOP_APPROACH_H]), "back": np.zeros(2),
@@ -227,7 +232,7 @@ def grasp_plan(side: str, target: Target) -> dict:
         "grasp": np.array([palm_xy[0], palm_xy[1], TABLE_Z + grip_h]),
         "back": rot2(hand_yaw, (-APPROACH_BACKOFF, 0.0)),
         # release point: the object's bottom 3 cm above the bin rim, it is dropped (not placed) into the bin
-        "drop": np.array([drop_xy[0], drop_xy[1], BIN_WALL_TOP + DROP_CLEARANCE + grip_h]),
+        "drop": np.array([drop_xy[0], drop_xy[1], _bin_top(target) + DROP_CLEARANCE + grip_h]),
         "drop_quat": yaw_quat(hand_yaw if KEEP_YAW else 0.0),
         "grasp_type": gt,
     }

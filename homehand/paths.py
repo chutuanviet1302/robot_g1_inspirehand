@@ -28,6 +28,7 @@ SCENE_XML = GENERATED_DIR / "scene_kitchen.xml"
 BIMANUAL_XML = GENERATED_DIR / "scene_bimanual.xml"   # the kitchen scene + a large box lifted with both hands
 CONVEYOR_XML = GENERATED_DIR / "scene_conveyor.xml"   # the kitchen scene + a conveyor belt across the counter
 OBJECTS_JSON = GENERATED_DIR / "objects.json"
+CONVEYOR_OBJECTS_JSON = GENERATED_DIR / "objects_conveyor.json"
 
 # Runtime data: datasets, eval database, episode replays, checkpoints.
 DATA_DIR = Path(os.environ.get("HOMEHAND_DATA", PROJECT_ROOT / "data"))

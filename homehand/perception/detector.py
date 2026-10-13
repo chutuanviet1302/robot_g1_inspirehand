@@ -34,9 +34,10 @@ class OracleDetector:
         assert frame.seg is not None, "OracleDetector needs a frame captured with_seg=True"
         out = []
         ids = np.full(frame.seg.shape, -1, dtype=np.int32)
+        names = list(self.env.obj_geoms)        # (the scene's objects: the tidy set or the conveyor set)
         for g, name in self.geom_obj.items():
-            ids[frame.seg == g] = CLASS_NAMES.index(name)
-        for c, name in enumerate(CLASS_NAMES):
+            ids[frame.seg == g] = names.index(name)
+        for c, name in enumerate(names):
             mask = ids == c
             n = int(mask.sum())
             if n < MIN_PIXELS:

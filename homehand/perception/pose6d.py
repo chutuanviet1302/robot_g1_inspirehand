@@ -22,7 +22,7 @@ import mujoco
 import numpy as np
 from scipy.spatial import cKDTree
 
-from homehand.model.objects import body_pose_for, lying_dims
+from homehand.model.objects import body_pose_for, lying_dims, rest_options
 from homehand.perception.camera import Frame, deproject
 from homehand.perception.localize import Detection, localize
 
@@ -126,7 +126,8 @@ def observed_points(det: Detection, frame: Frame, support_z: float, max_points: 
 
 def _result(name: str, R, t, rmse, inl, n, pts) -> Pose6D:
     up = R.T @ np.array([0.0, 0.0, 1.0])           # world up in the object's frame
-    rest = "upright" if abs(up[2]) > 0.7 else "lying"
+    opts = rest_options(name)
+    rest = opts[0] if len(opts) == 1 else ("upright" if abs(up[2]) > 0.7 else "lying")
     if rest == "upright":
         heading = float(np.arctan2(R[1, 0], R[0, 0]))
     else:
@@ -147,7 +148,7 @@ def estimate_pose(det: Detection, frame: Frame, model: mujoco.MjModel, obj_info:
     pts = _model(cache, model, det.name)
     height = float(obj_info[det.name]["height"])
     cands = []
-    for rest in (est.rest, "lying" if est.rest == "upright" else "upright"):
+    for rest in [est.rest] + [r for r in rest_options(det.name) if r != est.rest]:
         for k in range(4):
             p0, q0 = body_pose_for(det.name, rest, est.pos[0], est.pos[1], est.yaw + k * np.pi / 2, height, support_z)
             R0 = quat2mat(q0)

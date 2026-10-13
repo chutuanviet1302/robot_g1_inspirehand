@@ -110,9 +110,9 @@ def test_lying_grasps_reachable():
     from homehand.control.skills import Target, grasp_plan
     from homehand.env.kitchen_env import (BIN_HALF_INNER, BIN_XY, LONG_LYING, LONG_LYING_ABSY, LYING_X,
                                           SHORT_LYING_YAW, SPAWN_ZONES)
-    from homehand.model.objects import LYING, OBJECTS
+    from homehand.model.objects import LYING, OBJECTS, TIDY_OBJECTS
     ik = ArmIK()
-    for name in LYING:
+    for name in (n for n in LYING if n in TIDY_OBJECTS):     # (the tidy-table task's lying objects)
         o = OBJECTS[name]
         for side, sg in (("left", 1.0), ("right", -1.0)):
             for x in LYING_X:
@@ -354,24 +354,24 @@ def test_conveyor_carries_objects_at_belt_speed():
     _conveyor_scene()
     from homehand.env.conveyor_env import ConveyorEnv
     env = ConveyorEnv()
-    env.reset(seed=0, speed=0.04, objects=["meat_can", "soup_can"])
+    env.reset(seed=0, speed=0.04, objects=["foam_brick", "soup_can"])
     track = []
     done = False
     while not done:
         _, done = env.step(env.home_ctrl)
-        if "meat_can" in env.tracks:
-            p = env.object_pose("meat_can")[0]
+        if "foam_brick" in env.tracks:
+            p = env.object_pose("foam_brick")[0]
             if -0.3 < p[1] < 0.3:
                 track.append((env.t, p[0], p[1]))
     a = np.array(track)
     speed = (a[-1, 2] - a[0, 2]) / ((a[-1, 0] - a[0, 0]) * 0.04)
     assert abs(speed - 0.04) < 0.002 and np.ptp(a[:, 1]) < 0.005
-    assert env.info.object_outcomes == {"meat_can": "missed", "soup_can": "missed"}
-    env.reset(seed=0, speed=0.0, objects=["meat_can"])
-    p0 = env.object_pose("meat_can")[0]
+    assert env.info.object_outcomes == {"foam_brick": "missed", "soup_can": "missed"}
+    env.reset(seed=0, speed=0.0, objects=["foam_brick"])
+    p0 = env.object_pose("foam_brick")[0]
     for _ in range(50):
         env.step(env.home_ctrl)
-    assert np.linalg.norm(env.object_pose("meat_can")[0][:2] - p0[:2]) < 0.002    # (it settles ~4 mm onto the belt)
+    assert np.linalg.norm(env.object_pose("foam_brick")[0][:2] - p0[:2]) < 0.002    # (it settles ~4 mm onto the belt)
 
 
 def test_pose6d_from_one_view_and_tracking():
@@ -401,7 +401,7 @@ def test_pose6d_from_one_view_and_tracking():
     # tracking on the running belt (the perception pipeline: no fits at the image edge, refits when lost)
     from homehand.perception.conveyor_perception import ConveyorPerception
     per = ConveyorPerception(env, "oracle")
-    env.reset(seed=3, speed=0.04, objects=["meat_can", "sugar_box"])
+    env.reset(seed=3, speed=0.04, objects=["foam_brick", "gelatin_box"])
     per.reset((0.0, 0.04))
     checked = 0
     for k in range(400):

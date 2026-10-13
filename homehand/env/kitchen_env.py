@@ -22,7 +22,7 @@ from homehand import paths
 from homehand.control.safety import SafetyLayer
 from homehand.env.randomize import Randomization, resolve
 from homehand.model import spec
-from homehand.model.objects import CLASS_NAMES, LYING, OBJECTS, body_pose_for, lying_dims, rest_of
+from homehand.model.objects import CLASS_NAMES, LYING, OBJECTS, TIDY_OBJECTS, body_pose_for, lying_dims, rest_of
 
 TABLE_Z = 0.80
 FINGERS = ("thumb", "index", "middle", "ring", "pinky")
@@ -136,20 +136,24 @@ def yaw_of(q: np.ndarray) -> float:
 
 
 class KitchenEnv:
+    OBJECT_NAMES = list(TIDY_OBJECTS)       # the objects in this scene
+    OBJECTS_JSON = paths.OBJECTS_JSON
+
     def __init__(self, xml_path=None, record: bool = False):
         self.model = mujoco.MjModel.from_xml_path(str(xml_path or paths.SCENE_XML))
         self.model.opt.noslip_iterations = 3  # markedly reduces in-hand slip of the light Inspire fingers
         self.data = mujoco.MjData(self.model)
         self.record = record
-        self.obj_info = json.loads(paths.OBJECTS_JSON.read_text())
+        self.obj_info = json.loads(self.OBJECTS_JSON.read_text())
         m = self.model
         self.act_ids = np.array([m.actuator(n).id for n in spec.ACTUATORS])
         self.arm_qadr = np.array([m.jnt_qposadr[m.joint(j).id] for j in spec.ARM_JOINTS])
         hand_joints = [m.actuator(n).trnid[0] for n in spec.hand_actuators("left") + spec.hand_actuators("right")]
         self.hand_qadr = np.array([m.jnt_qposadr[j] for j in hand_joints])
-        self.obj_qadr = {n: m.jnt_qposadr[m.joint(f"{n}_free").id] for n in OBJECTS}
-        self.obj_body = {n: m.body(n).id for n in OBJECTS}
-        self.obj_geoms = {n: [g for g in range(m.ngeom) if m.geom_bodyid[g] == self.obj_body[n]] for n in OBJECTS}
+        self.obj_qadr = {n: m.jnt_qposadr[m.joint(f"{n}_free").id] for n in self.OBJECT_NAMES}
+        self.obj_body = {n: m.body(n).id for n in self.OBJECT_NAMES}
+        self.obj_geoms = {n: [g for g in range(m.ngeom) if m.geom_bodyid[g] == self.obj_body[n]]
+                          for n in self.OBJECT_NAMES}
         self.palm_site = {s: m.site(spec.palm_site(s)).id for s in spec.SIDES}
         self.hand_bodies = {
             s: {b for b in range(m.nbody) if m.body(b).name.startswith(spec.PREFIX[s])} for s in spec.SIDES
@@ -277,7 +281,7 @@ class KitchenEnv:
             layout = self.sample_layout(n, objects)
         self.layout = [tuple(x) for x in layout]
         used = {nm for nm, *_ in self.layout}
-        for k, name in enumerate(n for n in OBJECTS if n not in used):
+        for k, name in enumerate(n for n in self.OBJECT_NAMES if n not in used):
             a = self.obj_qadr[name]
             d.qpos[a:a + 3] = [PARK_XY[0], PARK_XY[1] + 0.2 * k, 0.001]
             d.qpos[a + 3:a + 7] = [1, 0, 0, 0]

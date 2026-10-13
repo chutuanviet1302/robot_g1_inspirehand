@@ -39,6 +39,7 @@ MAX_REPLANS = 2
 SYNC_IK_ITERS = 25
 SIDE_EXTRA_BACK = 0.03     # m: side grasps start their approach this much further behind the object
 HOVER_ABOVE_TOP = 0.08     # m: palm height above an upright object's top where a side grasp's descent starts
+DROP_RIM = 0.90            # m: release as above a rim this high (the bins' is 0.75: the objects drop into the deep bin)
 
 
 def _along(path: np.ndarray, u: float) -> np.ndarray:
@@ -89,6 +90,7 @@ class ConveyorPickSkill:
     def _target(self, t: float) -> Target:
         tg = target_from_pose(self.predict(t), self.obj_info, self.support_z)
         tg.drop_xy = self.drop_xy
+        tg.bin_top = DROP_RIM
         return tg
 
     def _pre(self, p: dict) -> np.ndarray:
@@ -213,6 +215,11 @@ class ConveyorPickSkill:
         sk = PickPlaceSkill(self.ik, self.side, tg, self.q, self.hand_cmd, obstacles=obstacles)
         keep = ("return",) if self.status == "empty_grasp" else ("transport", "drop", "retreat", "return")
         sk.plan = [s for s in sk.plan if s.name in keep]
+        for seg in sk.plan:
+            # the palm follows a Cartesian path to the bin: interpolating the joints from the lifted pose to the
+            # drop pose dipped the hand 15 cm, the fingers onto the belt
+            if seg.name == "transport":
+                seg.joint_space = False
         if self.status == "empty_grasp":
             sk.hand_cmd[self.side] = np.array(RELAXED_HAND, float)
         sk.q = self.q.copy()

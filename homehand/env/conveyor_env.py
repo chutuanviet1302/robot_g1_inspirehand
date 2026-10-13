@@ -26,7 +26,7 @@ from homehand.model import spec
 from homehand.env.kitchen_env import BIN_MAX_Z
 from homehand.model.build import (BELT_HALF_L, BELT_HALF_W, BELT_PERIOD, BELT_THICK, BELT_X, CONVEYOR_BIN_HALF,
                                   CONVEYOR_BINS)
-from homehand.model.objects import CLASS_NAMES, OBJECTS, body_pose_for, lying_dims
+from homehand.model.objects import CONVEYOR_NAMES, body_pose_for, lying_dims, rest_options
 
 BELT_Z = TABLE_Z + 0.0005 + BELT_THICK  # belt surface
 Y_SPAWN = BELT_HALF_L - 0.10            # objects appear at y = -Y_SPAWN (a 19 cm object lying along the belt fits)
@@ -41,6 +41,9 @@ OUTCOMES = ["success", "missed", "not_attempted", "knocked_over", "grasp_fail", 
 
 
 class ConveyorEnv(KitchenEnv):
+    OBJECT_NAMES = list(CONVEYOR_NAMES)
+    OBJECTS_JSON = paths.CONVEYOR_OBJECTS_JSON
+
     def __init__(self, record: bool = False):
         super().__init__(xml_path=paths.CONVEYOR_XML, record=record)
         self.belt_geom = self.model.geom("belt").id
@@ -48,7 +51,7 @@ class ConveyorEnv(KitchenEnv):
         self.belt_qadr = self.model.jnt_qposadr[self.model.joint("belt_slide").id]
         self.belt_dof = self.model.jnt_dofadr[self.model.joint("belt_slide").id]
         self.safety.env_bodies.add(self.model.body("conveyor").id)   # pressing on the belt is contact force too
-        self.obj_dof = {n: self.model.jnt_dofadr[self.model.joint(f"{n}_free").id] for n in OBJECTS}
+        self.obj_dof = {n: self.model.jnt_dofadr[self.model.joint(f"{n}_free").id] for n in self.OBJECT_NAMES}
         self.speed = 0.0
 
     # ------------------------------------------------------------------ reset / spawning
@@ -61,7 +64,7 @@ class ConveyorEnv(KitchenEnv):
         self.speed = float(speed)
         self.data.ctrl[self.belt_act] = self.speed
         self.data.qvel[self.belt_dof] = self.speed
-        names = list(objects) if objects else list(self.rng.permutation(CLASS_NAMES))[:n_objects]
+        names = list(objects) if objects else list(self.rng.permutation(self.OBJECT_NAMES))[:n_objects]
         self.queue = []          # (spawn step, name, x, y, yaw, rest)
         if self.speed > 0:
             t = 0.0
@@ -83,7 +86,8 @@ class ConveyorEnv(KitchenEnv):
         return self.observe()
 
     def _sample_pose(self, name: str, y: float) -> tuple[float, float, float, str]:
-        rest = "lying" if self.rng.random() < P_LYING else "upright"
+        opts = rest_options(name)
+        rest = opts[0] if len(opts) == 1 else ("lying" if self.rng.random() < P_LYING else "upright")
         return (SPAWN_X + self.rng.uniform(-X_JITTER, X_JITTER), y, float(self.rng.uniform(-np.pi, np.pi)), rest)
 
     def _spawn_due(self) -> None:
@@ -123,7 +127,7 @@ class ConveyorEnv(KitchenEnv):
 
     def _park(self, name: str) -> None:
         a, v = self.obj_qadr[name], self.obj_dof[name]
-        k = list(OBJECTS).index(name)
+        k = self.OBJECT_NAMES.index(name)
         self.data.qpos[a:a + 3] = [-1.2, 0.2 * k, 0.001]
         self.data.qpos[a + 3:a + 7] = [1, 0, 0, 0]
         self.data.qvel[v:v + 6] = 0.0
