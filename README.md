@@ -5,9 +5,11 @@ its head camera, **detects and recognises** the household objects on it (YCB: to
 sugar box, potted meat can), and clears them into a bin: **the hand closest to an object takes it**, the two
 hands alternate, each object gets **its own grasp type**, and the robot **drops** the objects into the bin.
 
-Everything — simulation, perception, planning, three controllers (scripted expert, **ACT**, **Diffusion
-Policy**), a **safety layer**, a sim-gap evaluation with Wilson confidence intervals and a failure taxonomy —
-is served by one command as a web app. It runs on a laptop (i5-11400H, GTX 1650 4 GB, 16 GB RAM) on Ubuntu,
+Everything — simulation, perception, planning, the controllers (scripted expert, **ACT**, **Diffusion
+Policy**, **flow matching**, a **SmolVLA** vision-language-action policy, **residual PPO** on top of the expert),
+a **safety layer**, a sim-gap evaluation with Wilson confidence intervals and a failure taxonomy — is served by
+one command as a web app. A second, **bimanual** task (both palms lift a box too wide for one hand) and a
+**ROS 2** interface (simulation bridge, controller node, Inspire hand driver bridge) complete it. It runs on a laptop (i5-11400H, GTX 1650 4 GB, 16 GB RAM) on Ubuntu,
 on **Windows 11** (native, Python 3.12: tests, viewer, web app and the whole training / evaluation pipeline),
 or in Docker.
 
@@ -18,11 +20,13 @@ head camera (RGB-D) ─► YOLOv8n-seg ─► masks + depth ─► 3-D footprint
                                                                               │
                                                      planner: nearest hand, outermost first, re-perceive
                                                                               │
-                         pick & place skill: scripted expert │ ACT │ Diffusion Policy (13 joint targets)
+      pick & place skill: scripted expert (+ residual PPO) │ ACT │ Diffusion │ flow matching │ SmolVLA
                                                                               │
                      safety layer: joint & velocity limits, self-collision, force, workspace, protective stop
                                                                               │
                                     MuJoCo 3 (G1 + 2× Inspire, 26 position actuators, 500 Hz / 25 Hz control)
+                                                                              │
+              optional ROS 2 Humble: /joint_states, /homehand/observation ◄─► /joint_command, /inspire/*
 ```
 
 ## Quick start
@@ -31,6 +35,8 @@ head camera (RGB-D) ─► YOLOv8n-seg ─► masks + depth ─► 3-D footprint
 # Python 3.10+, git
 python -m venv .venv && source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[learn]"                                 # core + torch/ultralytics (see GPU note below)
+pip install gymnasium==1.0.0 pandas && pip install --no-deps stable-baselines3==2.5.0   # PPO; --no-deps keeps
+                                                          # the CUDA torch (newer SB3 pulls a torch >= 2.8 CPU build)
 homehand fetch-assets                                     # G1 (Menagerie), Inspire (dex-urdf), YCB  ~90 MB
 homehand build-model                                      # -> generated/scene_kitchen.xml
 homehand serve                                            # opens http://127.0.0.1:8000
@@ -83,7 +89,12 @@ docker compose run --rm homehand build-model           # once: generated/ from t
 docker compose up web                                  # dashboard on http://localhost:8000
 xhost +SI:localuser:$USER && docker compose run --rm view   # native MuJoCo viewer on the host display
 docker compose run --rm test                           # tests
+docker compose build ros && docker compose run --rm ros   # ROS 2 Humble: one episode over topics (ros2/Dockerfile)
+docker compose run --rm ros ros2 launch homehand_ros tidy.launch.py task:=bimanual_lift seed:=4
 ```
+
+The ROS 2 node logic is covered by `tests/test_ros_convert.py` (runs without ROS); the `ros` image itself has not
+been built and run on this machine yet.
 
 Headless rendering (head camera, web stream) uses OSMesa on the CPU; the viewer uses the host X server with
 `/dev/dri` passed through. GPU training stays on the host
@@ -205,7 +216,58 @@ a demonstration (features: active arm + hand joints, palm position, perceived ob
 progress → 13 joint targets). **ACT** (CVAE + transformer, chunk 25, temporal ensembling) and **Diffusion
 Policy** (1-D conditional U-Net, DDPM training / 30-step DDIM, chunk 16, receding horizon 8) are trained on the
 same data and plugged into the same planner, so the evaluation compares the skills under identical
-perception and planning.
+perception and planning. **Flow matching** (rectified flow, the action head of π0) reuses the diffusion U-Net:
+it regresses the velocity that carries noise to the action chunk along a straight path and samples with 10 Euler
+steps (`homehand train --policy flow`).
+
+**Failure attribution** (`scripts/failure_audit.py`). The environment records, for every object, who first
+moved it before it was lifted, who tipped it over or knocked it out of the bin, and in which controller phase
+(robot link, other object, bin; `info.details["causes"]`). Tabulated over 100 episodes this drove the
+expert's last round of fixes: the clearance check now covers the whole arm from the elbow down (capsules fitted
+to its collision geometry), the object being carried and **the fingers in their commanded shape** (the IK model
+keeps them straight: the open thumb was 4 cm off), and every movement, not just the carry; the hand leaves the
+bin straight up with the fingers still open (a thumb curling into the relaxed pose flicked dropped cans back
+out); drop spots keep the whole footprint 2 cm inside the side walls; tall boxes and bottles are approached from
+further back while the open fingers would come down onto their top. Each change can be switched off
+(`HOMEHAND_PROBES=v1`, `HOMEHAND_RETREAT=0`, `HOMEHAND_DROP_INSIDE=0`, `HOMEHAND_BACKOFF_ADAPT=0`,
+`HOMEHAND_RISK_ORDER=0`).
+
+**Reinforcement learning** (`homehand/rl`, `homehand rl-train`, Stable-Baselines3 PPO, several simulation workers).
+Two residual set-ups on top of the scripted controllers, each with its environment, a shaped reward whose terms
+are logged one by one, learning curves (`scripts/plot_rl.py`) and an evaluation against the expert on the same
+episodes (`scripts/rl_baseline.py`, `scripts/bimanual_eval.py`):
+
+* *pick residual* — one pick of a real cluttered tidy-table scene per episode; the expert runs the free-space
+  phases and the policy adds ≤ 0.04 rad (arm) / 0.15 rad (fingers) to the acting side's 13 joint targets in the
+  contact phases (approach, grasp, lift). Observations are sensors a robot has: proprioception, the perceived
+  object and grasp plan, the phase and **one contact force per finger** (as the Inspire hand reports). Reward:
+  lift shaping, lifted / carried bonuses, penalties for nudging or tipping a neighbour or the target, finger
+  forces above 40 N, action size and protective stops. A zero residual commands exactly the expert (tested).
+* *bimanual grip* — the policy sets how hard each palm presses on the box, from finger forces and how far the
+  position-servoed arms sag, by interpolating between two pre-planned squeezes (nothing is solved while the arms
+  move).
+
+Neither beat the expert (see Results); both runs are kept with their diagnosis, because the reason is
+instructive: the pick expert already carries 92 % of the objects under physics randomisation, so the signal is
+~8 % of the episodes while PPO's exploration noise spoils good grasps; and no fixed squeeze — weaker or stronger —
+changes how often the box is lost, because it is lost by **pitching about the palm-to-palm axis** while being put
+down, which pressing harder does not prevent. The next step is an action that acts on that rotation (palm
+height difference / wrist pitch), checked first with fixed actions before training.
+
+**Bimanual task** (`homehand/env/bimanual_env.py`, `homehand/control/bimanual.py`, its own scene file so the
+tidy-table results stay comparable). A 14 × 20 × 12 cm, 0.6 kg box, too wide for one hand: both palms press on
+its sides in the handshake pose with the fingers curled into it, lift it 12 cm, hold it 2 s, carry it 6 cm aside
+and put it down. Both palms are planned together in Cartesian space with simultaneous two-arm IK and the same
+offset, so the grip does not change while the box moves. Box pose, mass, friction, latency and finger gains are
+randomised with the same presets as the main task.
+
+**ROS 2** (`ros2/homehand_ros`, Humble, ament_python; Docker: `ros2/Dockerfile`, compose service `ros`). Three
+nodes: `sim_bridge` (publishes `/joint_states` and the observation, applies `/joint_command`, reports the outcome
+and the command latency; lockstep or real time), `tidy_controller` (the planner with any of the controllers — or
+the bimanual expert — driven by topics only, never touching the simulator) and `inspire_bridge` (the hand part of
+every command as RH56DFX angle and force-limit registers, through `inspire_real.py`). The message conversions are
+plain Python and tested without ROS: an episode passed through them sends exactly the commands of the offline
+episode, so the ROS path changes nothing about the results.
 
 **Safety layer** (`homehand/control/safety.py`) between *every* controller and the robot: joint position limits
 with a 3 % margin, velocity limits (arm 2 rad/s, fingers 3 rad/s), monitoring of arm–arm / arm–torso contact,
@@ -267,6 +329,45 @@ unless stated, 95 % Wilson intervals:
 * **Found on the way**: the mass randomisation changed `body_mass` without `mj_setConst`, so a +20 % mass made
   grasped objects slip and the simulation diverge — earlier sim-gap numbers measured that bug. Fixed and covered
   by a regression test.
+
+### After the full run (October 2026): expert reliability, RL, bimanual, flow matching
+
+Same seeds compared episode by episode (paired); raw data in `data/failure_audit_*.json`,
+`data/rl_baseline_*.json`, `data/bimanual_eval_*.json`.
+
+**Expert reliability** (100 tidy-table episodes, nominal):
+
+| | clean episodes | objects in the bin |
+|---|---|---|
+| expert v2, ground-truth poses | 76 % [67–83] | 370/400 |
+| expert after the failure-attribution fixes, ground-truth poses | **87 % [79–92]** | **383/400** |
+| expert v2, YOLO (50 ep.) | 60 % [46–72] | 174/200 |
+| expert after the fixes, YOLO (50 ep.) | 62 % [48–74] | 175/200 |
+
+With ground-truth poses 15 episodes became clean and 4 stopped being clean (McNemar p = 0.02); with YOLO the
+gain disappears (7 vs 6, p = 1): the remaining losses are now perception-limited (mostly the mustard bottle
+slipping out of a grasp placed from a slightly wrong pose estimate). Single-object grasp benchmark: 140/144
+(before: 143/144; the difference is within trial-to-trial variation, p ≈ 0.4).
+
+**Bimanual box lift** (scripted expert, 50 episodes per level): **86 % [74–93]** nominal, **80 % [67–89]**
+`medium` (box ±2 cm / ±10°, mass ×0.7–1.5, friction ×0.7–1.3, latency, finger gains); successful placements land
+5–6 mm from the goal, upright. Failures: under `medium` mostly boxes lost while being put down, nominal mostly
+lifts that slipped before reaching 8 cm.
+
+**Reinforcement learning** (negative results, kept with their diagnosis — see "Reinforcement learning" above):
+
+| | success on the same episodes |
+|---|---|
+| pick, expert alone (300 picks, `medium`) | 92 % [89–95] carried to the release point |
+| pick, expert + PPO residual, 50 k steps, deterministic | 89 % [85–92] |
+| bimanual, expert's squeeze (30 ep., `high`) | 22/30 |
+| bimanual, fixed squeeze −0.5 / +0.5 / +1 (of the range) | 19 / 21 / 21 of 30 |
+
+Learning curves: [media/rl_residual_pick.png](media/rl_residual_pick.png),
+[media/rl_bimanual_grip.png](media/rl_bimanual_grip.png) (both flat).
+
+**Flow matching** (same 870 demonstrations as ACT / Diffusion, 30 k steps): validation action MSE 0.0117
+(ACT 0.0106, Diffusion 0.041); the closed-loop evaluation on the tidy-table task is still to be run.
 
 ## Licences
 

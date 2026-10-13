@@ -1,6 +1,6 @@
 # HomeHand — context & trạng thái dự án
 
-Cập nhật: 2026-10-09 (phiên 5, Windows — xem §4e). Thư mục Linux: `/home/tuanviet2003/Downloads/Project_Robotics`.
+Cập nhật: 2026-10-13 (phiên 7, Windows — xem §4g). Thư mục Linux: `/home/tuanviet2003/Downloads/Project_Robotics`.
 Máy: i5-11400H (6C/12T), GTX 1650 4 GB, RAM 16 GB, Ubuntu (đích: chạy được cả Windows).
 
 ## 1. Dự án là gì
@@ -180,6 +180,35 @@ có ở đây → chạy lại toàn bộ bằng `scripts/run_all.py`.
 - Windows + LeRobot: repo id thành `lerobot\smolvla_base` → tải về `models/smolvla_base`; symlink `last` lỗi
   quyền (chỉ Windows); torchcodec không nạp được → backend pyav; tên camera phải là camera1..3 (smolvla_base).
 
+## 4g. Phiên 7 (2026-10-12/13): độ tin cậy expert, RL, flow, bimanual, ROS 2 (nhánh `expert-reliability`)
+
+Mục tiêu phiên: đáp ứng JD "AI Manipulation Engineer" (RL, diffusion/flow, VLA, bimanual, ROS 2, sim-to-real).
+
+- **Quy trách nhiệm lỗi** (`scripts/failure_audit.py`, `env.info.details["causes"]`): ai làm vật xê dịch / đổ / văng
+  khỏi rổ, ở pha nào. Sửa theo đó: probe va chạm phủ cẳng tay + mọi đốt ngón (capsule từ collision mesh) + vật đang
+  cầm; **ngón tay đặt đúng lệnh tay** (mô hình IK để ngón thẳng: ngón cái lệch 4 cm); kiểm tra mọi pha; rút tay
+  thẳng lên khi thả (ngón cái từng hất lon ra khỏi rổ); điểm thả cách thành bên ≥ 2 cm; vật cao tiếp cận lùi xa
+  hơn. Ground truth 100 ep: **76 → 87 % sạch, 370 → 383/400** (McNemar p = 0.02). **YOLO 50 ep: 60 → 62 % (không
+  đổi, p = 1)** → nút thắt giờ là perception. Grasp-bench 140/144 (trước 143, khác biệt trong nhiễu).
+  Thử rồi bỏ: điểm thả giữa rổ (74 %), nhìn trước một bước giữ chỗ vật cao, lùi tay ra sau khi rút.
+- **RL** (`homehand/rl`, SB3 PPO 2.5 + gymnasium 1.0, `homehand rl-train --task pick|grip`): hai thí nghiệm, **đều
+  âm**, có chẩn đoán. (1) residual 13 chiều trên cú gắp: expert 92 % vs residual 89 % (300 lần gắp, medium) — gần
+  như không còn chỗ cải thiện, nhiễu khám phá phá cú nắm. (2) lực kẹp 2 tay: không mức ép cố định nào thắng
+  expert; hộp mất vì **lật quanh trục hai lòng bàn tay lúc đặt xuống** → biến điều khiển sai. Hướng tiếp: hành
+  động chống lật (chênh độ cao lòng bàn tay / pitch cổ tay), thử bằng hành động cố định trước khi train.
+  Observation có **lực từng ngón** (thêm `obs["finger_force"]`).
+- **Flow matching** (`policy/models.py: FlowMatchingPolicy`, `homehand train --policy flow`): 30k bước, val MSE
+  0.0117 (ACT 0.0106, Diffusion 0.041). **Chưa đánh giá trên task** (đánh giá YOLO 50 ep bị dừng ở 25/50).
+- **Bimanual** (`env/bimanual_env.py`, `control/bimanual.py`, cảnh riêng `generated/scene_bimanual.xml`): hộp
+  14×20×12 cm 0.6 kg, hai lòng bàn tay ép, ngón cong 1.47 rad, hộp ở x = 0.32 (x ≥ 0.35 tay sát giới hạn với tới).
+  **86 % nominal, 80 % medium** (50 ep mỗi mức, `scripts/bimanual_eval.py`).
+- **ROS 2** (`ros2/homehand_ros`, Docker `ros2/Dockerfile`, compose `ros`): sim_bridge / tidy_controller /
+  inspire_bridge, lockstep; test không cần ROS: episode qua message = offline từng bit. **Image chưa build
+  thử** (Docker Desktop đang tắt).
+- Bài học: `pip install stable-baselines3` thay torch CUDA bằng 2.14 CPU → cài `--no-deps`. `mj_setConst` đặt
+  qpos về qpos0 (phải lưu/khôi phục). Máy ngủ khi phiên rảnh làm train RL dừng 1 giờ → giữ máy thức. SubprocVecEnv
+  chờ worker chậm nhất (~22 bước agent/s với 3 worker). `git checkout` file làm mất thay đổi chưa commit → commit sớm.
+
 ## 5. Con số hiện tại (phiên 5, Windows, 2026-10-10 — chạy lại toàn bộ bằng `scripts/run_all.py`, ~11 giờ)
 
 Chi tiết đầy đủ: `RESULTS.md`. YOLO perception trừ khi ghi khác, 4 vật/episode (~một nửa vật ô ngoài nằm), CI Wilson 95%.
@@ -209,6 +238,13 @@ Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên má
 - Thay đổi phiên 5 được commit vào nhánh `windows-port` (chưa push, chưa merge vào `main`).
 
 ## 7. Việc còn lại
+
+(Cập nhật phiên 7 — các mục cũ bên dưới vẫn đúng trừ khi ghi khác.)
+- Đánh giá Flow matching trên task (YOLO 50 ep, so ACT/Diffusion).
+- Build + chạy thử Docker ROS 2 (`docker compose build ros && docker compose run --rm ros`).
+- RL có kết quả dương: hành động chống lật khi đặt hộp; hoặc residual dưới nhiễu mạnh hơn (ma sát ×0.5).
+- SmolVLA ≥ 20k bước trên Kaggle (bạn chạy).
+- Nhánh `expert-reliability` chưa push / chưa merge vào `main`.
 
 1. Giảm knocked_over/dropped của expert trong cảnh đầy đủ (vd. chừa khoảng cách khi tay đi ngang vật bên cạnh,
    thứ tự gắp theo nguy cơ va chạm) — grasp riêng lẻ đã ~99%.
