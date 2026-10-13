@@ -299,15 +299,18 @@ def build_bimanual_scene(out_dir=None) -> None:
     print(f"[build] wrote {out_dir / paths.BIMANUAL_XML.name}")
 
 
-# Conveyor task: a belt across the counter in front of the chest (along y), just in front of the bin. The belt is a
-# long slab on a slide joint driven at constant speed by a velocity actuator: objects ride it by real friction (no
-# rolling, no drift) and a hand holding one has to overcome exactly that friction. It is BELT_PERIOD longer than the
+# Conveyor task: a belt across the counter in front of the chest (along y), at the distance the arms reach best, and a
+# small bin on a stand at each hip, out of the belt's way: each hand drops into its own (neither reaches across the
+# body; a bin behind the belt pushed the belt so close to the chest that side grasps could not reach behind the
+# objects). The belt is a long slab on a slide joint driven at constant speed by a velocity actuator: objects ride it
+# by real friction and a hand holding one has to overcome exactly that friction. It is BELT_PERIOD longer than the
 # visible belt; `env.conveyor_env` shifts it back by BELT_PERIOD whenever it has run that far (a flat surface under
 # the objects either way, and friction only sees velocities).
-# Visible belt: from the counter edge (x 0.20: an object hanging over it is in the air, not dragged by the counter)
-# to the bin.
-BELT_X, BELT_HALF_W, BELT_HALF_L, BELT_THICK = 0.315, 0.115, 0.60, 0.002
+BELT_X, BELT_HALF_W, BELT_HALF_L, BELT_THICK = 0.355, 0.10, 0.55, 0.002   # (the palm-down hand reaches lying objects up to x ~0.37)
 BELT_PERIOD = 0.6
+CONVEYOR_BINS = {"left": (0.15, 0.47), "right": (0.15, -0.47)}   # bin centres (clear of the belt and of the elbows)
+CONVEYOR_BIN_Z = 0.65                                             # bin floor: its rim (0.75) passes under the elbows
+CONVEYOR_BIN_HALF = (0.09, 0.10)                                  # inner half size; walls 10 cm high, as the tidy bin
 
 
 def build_conveyor_scene(out_dir=None) -> None:
@@ -315,6 +318,21 @@ def build_conveyor_scene(out_dir=None) -> None:
     tree = ET.parse(out_dir / paths.SCENE_XML.name)
     root = tree.getroot()
     world = root.find("worldbody")
+    old = next(b for b in world.findall("body") if b.get("name") == "bin")     # the tidy-table bin is not used
+    world.remove(old)
+    hx, hy = CONVEYOR_BIN_HALF
+    w, h = 0.005, 0.05
+    for side, (x, y) in CONVEYOR_BINS.items():
+        b = ET.SubElement(world, "body", name=f"bin_{side}", pos=f"{x} {y} {CONVEYOR_BIN_Z}")
+        ET.SubElement(b, "geom", attrib={"class": "fixture"}, pos="0 0 0.005", size=f"{hx + w} {hy + w} 0.005",
+                      material="bin_mat")
+        for gx, gy, sx, sy in ((hx + w, 0, w, hy + w), (-hx - w, 0, w, hy + w),
+                               (0, hy + w, hx + w, w), (0, -hy - w, hx + w, w)):
+            ET.SubElement(b, "geom", attrib={"class": "fixture"}, pos=f"{gx} {gy} {h}", size=f"{sx} {sy} {h}",
+                          material="bin_mat")
+        # stand: the bin overhangs the counter's edge towards the robot
+        ET.SubElement(world, "geom", type="box", pos=f"{x} {y} {CONVEYOR_BIN_Z / 2}", size=f"{hx} {hy} {CONVEYOR_BIN_Z / 2}",
+                      rgba="0.5 0.5 0.52 1")
     # slab bottom 0.5 mm above the counter: the slide joint holds its height, so they never touch
     z = 0.80 + 0.0005 + BELT_THICK / 2
     half_len = BELT_HALF_L + BELT_PERIOD / 2
@@ -332,11 +350,10 @@ def build_conveyor_scene(out_dir=None) -> None:
         ET.SubElement(world, "geom", type="box", size=f"0.004 {BELT_HALF_L} 0.004",
                       pos=f"{BELT_X + sgn * (BELT_HALF_W + 0.004)} 0 0.804", rgba="0.6 0.6 0.62 1",
                       contype="0", conaffinity="0", group="2")
-    # the slab overlaps the bin's near wall and sits on the counter: it only has to touch objects and hands
-    contact = root.find("contact")
+    contact = root.find("contact")   # the slab sits on the counter, next to the bins: it only touches objects and hands
     if contact is None:
         contact = ET.SubElement(root, "contact")
-    for other in ("bin", "world"):
+    for other in ("world", *(f"bin_{side}" for side in CONVEYOR_BINS)):
         ET.SubElement(contact, "exclude", body1="conveyor", body2=other)
     act = root.find("actuator")
     if act is None:

@@ -425,7 +425,7 @@ class KitchenEnv:
     @staticmethod
     def _pick_culprit(names: list[str]) -> str:
         """Prefer a robot link over another object over the bin."""
-        robot = [n for n in names if n not in OBJECTS and n != "bin"]
+        robot = [n for n in names if n not in OBJECTS and not n.startswith("bin")]
         objs = [n for n in names if n in OBJECTS]
         return (robot or objs or names)[0]
 
@@ -433,7 +433,7 @@ class KitchenEnv:
 
     @staticmethod
     def _is_robot(name: str | None) -> bool:
-        return bool(name) and name not in OBJECTS and name != "bin"
+        return bool(name) and name not in OBJECTS and not name.startswith("bin")   # (bin, bin_right)
 
     def _blame(self, tr: ObjectTrack, now: list[str] | None, phase: str) -> dict:
         out = self._blame_body(tr, now, phase)

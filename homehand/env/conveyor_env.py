@@ -1,11 +1,13 @@
 """Conveyor task: YCB objects ride a running belt across the counter; the robot picks them on the fly into the bin.
 
-Scene `generated/scene_conveyor.xml` = the kitchen scene + a belt along y in front of the chest (`model.build`,
-BELT_X / BELT_HALF_W / BELT_HALF_L), just in front of the bin: a long slab on a slide joint, driven at the belt
+Scene `generated/scene_conveyor.xml` = the kitchen scene with a short belt along y in front of the chest (`model.build`,
+BELT_X / BELT_HALF_W / BELT_HALF_L) and a small bin on a stand at each hip (`CONVEYOR_BINS`; each hand drops into
+its own, neither reaches across the body). The belt is a long slab on a slide joint, driven at the belt
 speed by a velocity actuator and shifted back by BELT_PERIOD whenever it has run that far. Objects ride it by real
 friction, so a hand that grasps one works against exactly the belt's friction.
 
-The objects enter at the upstream end (y = -Y_SPAWN, moving towards +y) one after the other, `GAP` apart, upright
+The objects are put on the belt at the upstream end (y = -Y_SPAWN, as from a chute; moving towards +y) one after the
+other, `GAP` apart, upright
 or lying, at any heading; one that reaches y = +Y_MISS on the belt is taken off and counted `missed`. With the belt
 stopped (speed 0) they are laid out along the belt at once, inside the pick zones.
 
@@ -21,17 +23,19 @@ import numpy as np
 from homehand import paths
 from homehand.env.kitchen_env import TABLE_Z, KitchenEnv, ObjectTrack
 from homehand.model import spec
-from homehand.model.build import BELT_HALF_L, BELT_HALF_W, BELT_PERIOD, BELT_THICK, BELT_X
+from homehand.env.kitchen_env import BIN_MAX_Z
+from homehand.model.build import (BELT_HALF_L, BELT_HALF_W, BELT_PERIOD, BELT_THICK, BELT_X, CONVEYOR_BIN_HALF,
+                                  CONVEYOR_BINS)
 from homehand.model.objects import CLASS_NAMES, OBJECTS, body_pose_for, lying_dims
 
 BELT_Z = TABLE_Z + 0.0005 + BELT_THICK  # belt surface
-Y_SPAWN = 0.55                          # objects appear at y = -Y_SPAWN
-Y_MISS = 0.50                           # ... and are taken off at y = +Y_MISS
+Y_SPAWN = BELT_HALF_L - 0.10            # objects appear at y = -Y_SPAWN (a 19 cm object lying along the belt fits)
+Y_MISS = 0.45                           # ... and are taken off at y = +Y_MISS
 GAP = (0.22, 0.32)                      # m between consecutive objects along the belt
 P_LYING = 0.5
-SPAWN_X = 0.31                          # footprint centre across the belt: a 19 cm object lying across it clears the bin
+SPAWN_X = BELT_X                         # footprint centre across the belt
 X_JITTER = 0.01
-STATIC_YS = (-0.30, -0.16, 0.16, 0.30)  # belt stopped: where the objects lie (inside the two hands' pick zones)
+STATIC_YS = (-0.28, -0.14, 0.14, 0.28)  # belt stopped: where the objects lie (inside the two hands' pick zones)
 OUTCOMES = ["success", "missed", "not_attempted", "knocked_over", "grasp_fail", "dropped", "misplaced", "timeout",
             "not_spawned", "safety_stop", "sim_error"]
 
@@ -49,13 +53,13 @@ class ConveyorEnv(KitchenEnv):
 
     # ------------------------------------------------------------------ reset / spawning
     def reset(self, task: str = "conveyor", seed: int = 0, objects=None, randomization=None, layout=None,
-              speed: float = 0.03) -> dict:
+              speed: float = 0.03, n_objects: int = 4) -> dict:
         super().reset("pick_place", seed=seed, randomization=randomization, layout=[])   # all objects parked
         self.task = task
         self.speed = float(speed)
         self.data.ctrl[self.belt_act] = self.speed
         self.data.qvel[self.belt_dof] = self.speed
-        names = list(objects) if objects else list(self.rng.permutation(CLASS_NAMES))
+        names = list(objects) if objects else list(self.rng.permutation(CLASS_NAMES))[:n_objects]
         self.queue = []          # (spawn step, name, x, y, yaw, rest)
         if self.speed > 0:
             t = 0.0
@@ -128,6 +132,12 @@ class ConveyorEnv(KitchenEnv):
         obs = super().observe()
         obs["belt"] = {"speed": self.speed, "x": BELT_X, "half_width": BELT_HALF_W, "y_miss": Y_MISS}
         return obs
+
+    def in_bin(self, name: str) -> bool:
+        """Centre of mass inside either bin, resting low."""
+        com = self.data.xipos[self.obj_body[name]]
+        return any(bool(np.all(np.abs(com[:2] - np.asarray(xy)) < CONVEYOR_BIN_HALF) and com[2] < BIN_MAX_Z)
+                   for xy in CONVEYOR_BINS.values())
 
     def _resolved(self, name: str) -> bool:
         tr = self.tracks[name]
