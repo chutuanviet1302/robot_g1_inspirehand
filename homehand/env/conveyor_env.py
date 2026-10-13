@@ -53,7 +53,9 @@ class ConveyorEnv(KitchenEnv):
 
     # ------------------------------------------------------------------ reset / spawning
     def reset(self, task: str = "conveyor", seed: int = 0, objects=None, randomization=None, layout=None,
-              speed: float = 0.03, n_objects: int = 4) -> dict:
+              speed: float = 0.03, n_objects: int = 4, gap=GAP) -> dict:
+        """speed: belt speed (m/s, 0 = stopped); n_objects: how many (each class at most once); gap: (min, max) m
+        between consecutive objects along the belt."""
         super().reset("pick_place", seed=seed, randomization=randomization, layout=[])   # all objects parked
         self.task = task
         self.speed = float(speed)
@@ -65,7 +67,7 @@ class ConveyorEnv(KitchenEnv):
             t = 0.0
             for n in names:
                 self.queue.append((int(round(t / spec.CONTROL_DT)), n, *self._sample_pose(n, -Y_SPAWN)))
-                t += self.rng.uniform(*GAP) / self.speed
+                t += self.rng.uniform(*gap) / self.speed
             travel = (Y_SPAWN + Y_MISS) / self.speed
             self.horizon = int((t + travel) / spec.CONTROL_DT) + 200
         else:

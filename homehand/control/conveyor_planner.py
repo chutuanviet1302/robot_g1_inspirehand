@@ -1,6 +1,8 @@
 """Conveyor controller: perceive at 5 Hz, choose the next object and hand, intercept it on the belt, drop it in the bin.
 
-Choosing (one hand at a time): for every tracked object not yet taken and each hand, the earliest synchronisation
+Both hands work at once, each in its own pick zone and dropping into the bin at its own hip; the arm command merges
+the arm joints and hand of each busy hand's skill. Choosing, for an idle hand: for every tracked object not yet
+taken, the earliest synchronisation
 time t_sync such that
 - the arm can reach the hover pose by then (joint-space path, peak joint speed within the limit),
 - the object is inside that hand's pick zone at t_sync and still inside when the synced phases end
@@ -51,7 +53,7 @@ class ConveyorPlanner:
         self.perception.reset((0.0, self.speed))
         self.q = self.ik.q_home.copy()
         self.hand_cmd = {s: np.array(RELAXED_HAND, float) for s in spec.SIDES}
-        self.skill: ConveyorPickSkill | None = None
+        self.skills: dict[str, ConveyorPickSkill | None] = {s: None for s in spec.SIDES}
         self.taken: set[str] = set()
         self.infeasible_until: dict = {}
         self.skipped: set[str] = set()
@@ -65,7 +67,12 @@ class ConveyorPlanner:
 
     @property
     def phase(self) -> str:
-        return f"{self.skill.side}:{self.skill.phase}" if self.skill else "wait"
+        busy = [f"{s}:{sk.phase}" for s, sk in self.skills.items() if sk is not None]
+        return busy[0] if busy else "wait"
+
+    @property
+    def skill(self):                     # (the first busy hand's skill: for logging and the viewer)
+        return next((sk for sk in self.skills.values() if sk is not None), None)
 
     # ------------------------------------------------------------------ decision
     def _zone(self, side: str) -> tuple[float, float]:
@@ -114,12 +121,12 @@ class ConveyorPlanner:
             return float(t_sync)
         return None
 
-    def _choose(self, now: float):
+    def _choose(self, now: float, sides):
         best = None
         for name, track in self.perception.tracks.items():
             if name in self.taken or track.n_updates < 2:
                 continue
-            for side in spec.SIDES:
+            for side in sides:
                 key = (name, side)
                 # an object/hand pair found infeasible is looked at again only RECHECK s later (each look is up
                 # to a few dozen IK solves)
@@ -138,40 +145,46 @@ class ConveyorPlanner:
                 for n, tr in self.perception.tracks.items() if n != name and n not in self.taken]
 
     # ------------------------------------------------------------------ loop
+    def _start(self, choice, obs: dict, t: float) -> None:
+        t_sync, name, side = choice
+        track = self.perception.tracks[name]
+        tg = target_from_pose(track.predict(t_sync), self.env.obj_info, self.perception.support_z)
+        dx, din = DROP_OFFSETS[self.drops[side] % len(DROP_OFFSETS)]
+        bx, by = CONVEYOR_BINS[side]
+        drop = np.array([bx + dx, by - np.sign(by) * din])
+        self.drops[side] += 1
+        self.skills[side] = ConveyorPickSkill(self.ik, side, name, track.predict, self.q, self.hand_cmd, t, t_sync,
+                                              track.velocity, self.env.obj_info, self.perception.support_z, drop,
+                                              others=lambda tt, name=name: self._others(name, tt))
+        self.taken.add(name)
+        self.log.append({"t": obs["t"], "event": "pick", "object": name, "side": side,
+                         "t_sync": round(t_sync, 2), "rest": tg.rest})
+
     def act(self, obs: dict) -> np.ndarray:
         t = obs["t"] * spec.CONTROL_DT
         if obs["t"] % PERCEIVE_EVERY == 0:
             self.perception.update(t)
-        if self.skill is not None:
-            a = self.skill.act(obs)
-            if self.skill.done:
-                self.log.append({"t": obs["t"], "event": "skill_done", "object": self.skill.name,
-                                 "side": self.skill.side, "status": self.skill.status if not self.skill.placed else "placed"})
-                if self.skill.status == "empty_grasp":
-                    self.taken.discard(self.skill.name)
-                self.q, self.hand_cmd = self.skill.q, self.skill.hand_cmd
-                self.skill = None
-            self.env.context = {"phase": self.phase, "target": self.skill.name if self.skill else None}
-            return a
-        choice = self._choose(t) if obs["t"] % PERCEIVE_EVERY == 0 else None
-        if choice is not None:
-            t_sync, name, side = choice
-            track = self.perception.tracks[name]
-            tg = target_from_pose(track.predict(t_sync), self.env.obj_info, self.perception.support_z)
-            dx, din = DROP_OFFSETS[self.drops[side] % len(DROP_OFFSETS)]
-            bx, by = CONVEYOR_BINS[side]
-            drop = np.array([bx + dx, by - np.sign(by) * din])
-            self.drops[side] += 1
-            self.skill = ConveyorPickSkill(self.ik, side, name, track.predict, self.q, self.hand_cmd, t, t_sync,
-                                           track.velocity, self.env.obj_info, self.perception.support_z, drop,
-                                           others=lambda tt, name=name: self._others(name, tt))
-            self.taken.add(name)
-            self.log.append({"t": obs["t"], "event": "pick", "object": name, "side": side,
-                             "t_sync": round(t_sync, 2), "rest": tg.rest})
-            self.env.context = {"phase": self.phase, "target": name}
-            return self.skill.act(obs)
-        # nothing to do: the episode ends when the belt has delivered everything and nothing is left on it
-        if not getattr(self.env, "queue", []) and not any(o["on_table"] for o in obs["objects"].values()):
+            for side in spec.SIDES:                         # an idle hand takes the next object it can
+                if self.skills[side] is None:
+                    choice = self._choose(t, [side])
+                    if choice is not None:
+                        self._start(choice, obs, t)
+        for side, sk in self.skills.items():
+            if sk is None:
+                continue
+            sk.act(obs)
+            idx = self.ik.arm_qadr[side]                    # this arm and hand come from this hand's skill
+            self.q[idx] = sk.q[idx]
+            self.hand_cmd[side] = np.asarray(sk.hand_cmd[side], float).copy()
+            if sk.done:
+                self.log.append({"t": obs["t"], "event": "skill_done", "object": sk.name, "side": side,
+                                 "status": "placed" if sk.placed else sk.status})
+                if sk.status == "empty_grasp":
+                    self.taken.discard(sk.name)
+                self.skills[side] = None
+        busy = [s for s, sk in self.skills.items() if sk is not None]
+        self.env.context = {"phase": self.phase, "target": self.skills[busy[0]].name if busy else None}
+        # the episode ends when the belt has delivered everything and nothing is left on it
+        if not busy and not getattr(self.env, "queue", []) and not any(o["on_table"] for o in obs["objects"].values()):
             self.done_flag = True
-        self.env.context = {"phase": "wait", "target": None}
         return compose_action(self.ik, self.q, self.hand_cmd)
