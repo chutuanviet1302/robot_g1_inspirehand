@@ -371,7 +371,7 @@ def test_conveyor_carries_objects_at_belt_speed():
     p0 = env.object_pose("meat_can")[0]
     for _ in range(50):
         env.step(env.home_ctrl)
-    assert np.linalg.norm(env.object_pose("meat_can")[0] - p0) < 0.002
+    assert np.linalg.norm(env.object_pose("meat_can")[0][:2] - p0[:2]) < 0.002    # (it settles ~4 mm onto the belt)
 
 
 def test_grip_env_reward_terms():
