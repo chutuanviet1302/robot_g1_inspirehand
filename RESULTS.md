@@ -27,6 +27,7 @@ Reproduce everything with `python scripts/run_all.py`.
 | 14 | expert v2 (human-like) | yolo | nominal | 50 | 60% [46–72] | 87% [82–91] | 0 |
 | 15 | smolvla | oracle | nominal | 10 | 0% [0–28] | 5% [1–16] | 3 |
 | 16 | smolvla (held-out phrasing) | oracle | nominal | 5 | 0% [0–43] | 15% [5–36] | 1 |
+| 18 | flow matching | yolo | nominal | 50 | 56% [42–69] | 83% [77–88] | 2 |
 
 ## Failure taxonomy (objects)
 
@@ -48,6 +49,7 @@ Reproduce everything with `python scripts/run_all.py`.
 | 14 expert v2 (human-like) / nominal | 174 | 2 | 5 | 7 | 2 | 7 | 3 | 0 | 0 |
 | 15 smolvla / nominal | 2 | 12 | 4 | 11 | 0 | 11 | 0 | 0 | 0 |
 | 16 smolvla (held-out phrasing) / nominal | 3 | 2 | 2 | 3 | 0 | 9 | 1 | 0 | 0 |
+| 18 flow matching / nominal | 166 | 10 | 5 | 8 | 2 | 8 | 1 | 0 | 0 |
 
 ## Per object / grasp type (nominal runs)
 
@@ -81,6 +83,10 @@ Reproduce everything with `python scripts/run_all.py`.
 | 16 smolvla (held-out phrasing) | mustard bottle | low power wrap | 20% [4–62] |
 | 16 smolvla (held-out phrasing) | sugar box | palmar box grasp | 20% [4–62] |
 | 16 smolvla (held-out phrasing) | potted meat can | tripod pinch | 0% [0–43] |
+| 18 flow matching | tomato soup can | cylindrical power wrap | 84% [71–92] |
+| 18 flow matching | mustard bottle | low power wrap | 76% [63–86] |
+| 18 flow matching | sugar box | palmar box grasp | 78% [65–87] |
+| 18 flow matching | potted meat can | tripod pinch | 94% [84–98] |
 
 ## Grasp benchmark (single object, ground-truth pose)
 
@@ -170,6 +176,7 @@ episodes, so this table is the better guide to what the controller depends on.
 
 - **act_expert_v1**: 9.019 M params, 25000 steps, batch 128, cuda, 167.2 min, final validation action-MSE 0.01056
 - **diffusion_expert_v1**: 18.24 M params, 30000 steps, batch 128, cuda, 107.0 min, final validation action-MSE 0.04144
+- **flow_expert_v1**: 18.24 M params, 30000 steps, batch 256, cuda, 177.6 min, final validation action-MSE 0.01168
 - dataset **expert_v1**: 870 successful skill executions / 324197 frames from 300 tidy episodes; per object {'meat_can': 236, 'mustard': 213, 'soup_can': 225, 'sugar_box': 196}; per hand {'left': 547, 'right': 323}
 
 ## Perception
@@ -180,3 +187,12 @@ YOLOv8n-seg on held-out synthetic images: box mAP50 0.995 (mAP50-95 0.993), mask
 |---|---|---|---|---|---|---|
 | oracle | 100.0% | 2.4 mm | 4.5 mm | 9.1° | 100% | 8.4 ms |
 | yolo | 100.0% | 3.5 mm | 5.4 mm | 9.7° | 98% | 50.8 ms |
+
+## Conveyor picking (`scripts/conveyor_eval.py`, nominal physics, both hands)
+
+| pose source | belt speed | objects / episode | episodes | objects in the bin | clean episodes | per object | protective stops |
+|---|---|---|---|---|---|---|---|
+| ground_truth | 3 cm/s | 2 | 10 | 95% [76–99] | 9/10 | apple 4/4, banana 5/6, foam_brick 4/4, soup_can 6/6 | 0 |
+| ground_truth | 3 cm/s | 4 | 8 | 84% [68–93] | 5/8 | apple 7/8, banana 5/8, foam_brick 8/8, soup_can 7/8 | 0 |
+| oracle | 3 cm/s | 2 | 10 | 85% [64–95] | 7/10 | apple 3/4, banana 5/6, foam_brick 4/4, soup_can 5/6 | 0 |
+| oracle | 3 cm/s | 4 | 8 | 84% [68–93] | 3/8 | apple 7/8, banana 6/8, foam_brick 8/8, soup_can 6/8 | 0 |

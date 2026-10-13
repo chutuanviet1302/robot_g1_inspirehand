@@ -124,6 +124,18 @@ def main():
             for b in json.loads((det / "bench.json").read_text()).values():
                 lines.append(f"| {b['detector']} | {100 * b['recall']:.1f}% | {b['pos_err_mean_mm']} mm | {b['pos_err_p90_mm']} mm | "
                              f"{b['yaw_err_mean_deg']}° | {100 * b.get('rest_pose_accuracy', 1.0):.0f}% | {b['detect_ms']} ms |")
+    conveyor = sorted((ROOT / "data").glob("conveyor_eval_*.json"))
+    if conveyor:
+        lines += ["", "## Conveyor picking (`scripts/conveyor_eval.py`, nominal physics, both hands)", "",
+                  "| pose source | belt speed | objects / episode | episodes | objects in the bin | clean episodes | "
+                  "per object | protective stops |", "|---|---|---|---|---|---|---|---|"]
+        for f in conveyor:
+            c = json.loads(f.read_text())
+            cfg = c["config"]
+            per = ", ".join(f"{k} {v}" for k, v in sorted(c["per_object"].items()))
+            lines.append(f"| {cfg['pose']} | {100 * cfg['speed']:g} cm/s | {cfg['objects']} | {cfg['episodes']} | "
+                         f"{pct(c['objects_in_bin'])} | {c['clean_episodes']['k']}/{c['clean_episodes']['n']} | {per} | "
+                         f"{c['protective_stops']} |")
     (ROOT / "RESULTS.md").write_text("\n".join(lines) + "\n", encoding="utf-8")   # (Windows default: cp1252)
     print(f"wrote {ROOT / 'RESULTS.md'}")
 

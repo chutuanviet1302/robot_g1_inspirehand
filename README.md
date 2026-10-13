@@ -8,7 +8,8 @@ hands alternate, each object gets **its own grasp type**, and the robot **drops*
 Everything — simulation, perception, planning, the controllers (scripted expert, **ACT**, **Diffusion
 Policy**, **flow matching**, a **SmolVLA** vision-language-action policy, **residual PPO** on top of the expert),
 a **safety layer**, a sim-gap evaluation with Wilson confidence intervals and a failure taxonomy — is served by
-one command as a web app. A second, **bimanual** task (both palms lift a box too wide for one hand) and a
+one command as a web app. A second, **bimanual** task (both palms lift a box too wide for one hand), a third,
+**conveyor** task (both hands pick objects off a running belt, located by 6-D pose estimation from the camera) and a
 **ROS 2** interface (simulation bridge, controller node, Inspire hand driver bridge) complete it. It runs on a laptop (i5-11400H, GTX 1650 4 GB, 16 GB RAM) on Ubuntu,
 on **Windows 11** (native, Python 3.12: tests, viewer, web app and the whole training / evaluation pipeline),
 or in Docker.
@@ -263,6 +264,27 @@ and put it down. Both palms are planned together in Cartesian space with simulta
 offset, so the grip does not change while the box moves. Box pose, mass, friction, latency and finger gains are
 randomised with the same presets as the main task.
 
+**Conveyor task** (`homehand/env/conveyor_env.py`, `homehand/perception/pose6d.py`, `tracker.py`,
+`homehand/control/conveyor_planner.py`, `conveyor_skill.py`; its own scene file). A belt runs across the counter
+in front of the chest (3 cm/s by default; a slab on a slide joint driven at constant speed, so objects ride it by
+real friction) and carries hand-sized YCB objects — tomato soup can (upright or lying), foam brick, apple, banana —
+at random headings into the robot's reach; a 20 cm deep bin stands at each hip. It never stops:
+* **6-D pose from the head camera**: mask (oracle segmentation or YOLO) + depth → point cloud → point-to-point
+  ICP against the camera-facing points of the YCB mesh, from 8–16 initial guesses (footprint fit, turns, flips
+  for objects that can lie upside down); while tracking, ICP from the predicted pose, with a full search every
+  fifth look that replaces a fit stuck in a local minimum.
+* **Tracking**: a constant-velocity Kalman filter per object with a tight prior on the belt's known speed (one bad
+  fit must not swing the velocity: the hand aims 5 s ahead).
+* **Interception**: for each idle hand and each tracked object, the earliest time at which the object is inside
+  that hand's zone, the grasp, pre-grasp and hover poses have IK solutions, and the arm can be there in time;
+  round or two-fold symmetric objects take the grasp turn the arm reaches best. Both hands work at once.
+* **Picking on the move**: the arm reaches where the object will be, then descends, closes and lifts in the
+  object's moving frame on a pre-planned joint path (warm-started IK per step), replanned when the prediction
+  shifts by > 1 cm; a path that stretches too long or misses its targets aborts and frees the object for
+  another try. The carry follows a Cartesian path to the bin and the object is dropped in.
+The gelatin box (a 3 cm flat box) was tried and left out: about half of its grasps from above slipped, whatever
+the grasp type.
+
 **ROS 2** (`ros2/homehand_ros`, Humble, ament_python; Docker: `ros2/Dockerfile`, compose service `ros`). Three
 nodes: `sim_bridge` (publishes `/joint_states` and the observation, applies `/joint_command`, reports the outcome
 and the command latency; lockstep or real time), `tidy_controller` (the planner with any of the controllers — or
@@ -373,6 +395,22 @@ nominal, 50 episodes): **56 % [42–69] clean, 83 % [77–88] of the objects, 2 
 (64 % / 86 %, 0 stops) and Diffusion Policy (30 % / 70 %, 5 stops) with a third of Diffusion's sampling steps;
 validation action MSE 0.0117 (ACT 0.0106, Diffusion 0.041). Caveat: ACT and Diffusion were evaluated before the
 planner changes above (grasp order), flow matching after them.
+
+**Conveyor picking** (`python scripts/conveyor_eval.py`, belt at 3 cm/s, objects 40–55 cm apart, both hands,
+nominal physics; raw data `data/conveyor_eval_*.json`):
+
+| pose source | objects per episode | objects in the bin | clean episodes | protective stops |
+|---|---|---|---|---|
+| ground truth | 4 (8 ep.) | 27/32 — 84 % [68–93] | 5/8 | 0 |
+| **6-D pose from the camera** (oracle masks + ICP) | 4 (8 ep.) | **27/32 — 84 % [68–93]** | 3/8 | 0 |
+| ground truth | 2 (10 ep.) | 19/20 — 95 % [76–99] | 9/10 | 0 |
+| 6-D pose from the camera | 2 (10 ep.) | 17/20 — 85 % [64–95] | 7/10 | 0 |
+
+Per object (4 per episode, camera pose): foam brick 8/8, apple 7/8, soup can 6/8, banana 6/8. Losses: objects
+that ride past (no hand reaches the grasp at their heading in time) and objects knocked over by the closing
+fingers. With camera poses the banana is the hardest (its long, gently curved shape seen from one side lets ICP
+slide along it). Not yet measured: YOLO masks (the detector was trained on the tidy-table objects only) and
+other belt speeds.
 
 ## Licences
 
