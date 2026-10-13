@@ -14,7 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip lib
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+# Ubuntu 22.04's pip 22.0 installs a pyproject.toml project as "UNKNOWN-0.0.0" without its dependencies: use a
+# current pip (setuptools stays the system's 59, which colcon needs for ament_python packages).
 # numpy < 2: the Humble Python packages (rclpy, message types) are built against Ubuntu 22.04's numpy 1.x
+RUN python3 -m pip install --upgrade "pip>=24"
 COPY pyproject.toml README.md ./
 RUN mkdir homehand && touch homehand/__init__.py \
     && pip3 install "numpy<2" "." && pip3 uninstall -y homehand && rm -rf homehand build
@@ -24,7 +27,12 @@ RUN if [ "$WITH_TORCH" = "1" ]; then \
       && pip3 install "numpy<2" stable-baselines3==2.5.0 gymnasium==1.0.0 pandas; \
     fi
 COPY homehand ./homehand
-RUN pip3 install --no-deps --no-build-isolation -e . && mkdir -p generated models data
+# installed (not editable: that would need a newer setuptools than colcon tolerates), so the package no longer
+# sits next to generated/, models/ and data/: point homehand at the mounted directories
+ENV HOMEHAND_GENERATED=/app/generated HOMEHAND_MODELS=/app/models HOMEHAND_DATA=/app/data \
+    HOMEHAND_THIRD_PARTY=/app/third_party
+RUN pip3 install --no-deps . && mkdir -p generated models data \
+    && python3 -c "import mujoco, mink, homehand.env.kitchen_env; print('homehand OK, mujoco', mujoco.__version__)"
 
 COPY ros2/homehand_ros /ws/src/homehand_ros
 RUN . /opt/ros/humble/setup.sh && cd /ws && colcon build --symlink-install

@@ -119,4 +119,5 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.05)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():          # Ctrl-C / launch shutdown already closed the context
+            rclpy.shutdown()

@@ -204,8 +204,10 @@ Mục tiêu phiên: đáp ứng JD "AI Manipulation Engineer" (RL, diffusion/flo
   14×20×12 cm 0.6 kg, hai lòng bàn tay ép, ngón cong 1.47 rad, hộp ở x = 0.32 (x ≥ 0.35 tay sát giới hạn với tới).
   **86 % nominal, 80 % medium** (50 ep mỗi mức, `scripts/bimanual_eval.py`).
 - **ROS 2** (`ros2/homehand_ros`, Docker `ros2/Dockerfile`, compose `ros`): sim_bridge / tidy_controller /
-  inspire_bridge, lockstep; test không cần ROS: episode qua message = offline từng bit. **Image chưa build
-  thử** (Docker Desktop đang tắt).
+  inspire_bridge, lockstep; test không cần ROS: episode qua message = offline từng bit. Docker (2026-10-13):
+  build OK (1.4 GB); seed 0 dọn bàn + seed 4 nhấc hộp qua topic cho đúng kết quả như offline; trễ lệnh ~2.5 ms.
+  Lỗi đã sửa: pip 22 của Ubuntu cài pyproject thành "UNKNOWN" không dependency (→ nâng pip, kiểm tra import khi
+  build); đường dẫn generated/ khi cài non-editable (→ biến HOMEHAND_*); rclpy.shutdown hai lần.
 - Bài học: `pip install stable-baselines3` thay torch CUDA bằng 2.14 CPU → cài `--no-deps`. `mj_setConst` đặt
   qpos về qpos0 (phải lưu/khôi phục). Máy ngủ khi phiên rảnh làm train RL dừng 1 giờ → giữ máy thức. SubprocVecEnv
   chờ worker chậm nhất (~22 bước agent/s với 3 worker). `git checkout` file làm mất thay đổi chưa commit → commit sớm.
@@ -241,7 +243,6 @@ Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên má
 ## 7. Việc còn lại
 
 (Cập nhật phiên 7 — các mục cũ bên dưới vẫn đúng trừ khi ghi khác.)
-- Build + chạy thử Docker ROS 2 (`docker compose build ros && docker compose run --rm ros`).
 - RL có kết quả dương: hành động chống lật khi đặt hộp; hoặc residual dưới nhiễu mạnh hơn (ma sát ×0.5).
 - SmolVLA ≥ 20k bước trên Kaggle (bạn chạy).
 

@@ -70,6 +70,7 @@ class BimanualEnv(KitchenEnv):
         self.max_lift, self.held_steps, self.best_hold = 0.0, 0, 0
         self.was_lifted = self.dropped = False
         self.info.objects = ["tote"]
+        self.info.task = task
         return self.observe()
 
     # ------------------------------------------------------------------ state of the box
