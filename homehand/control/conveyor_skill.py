@@ -53,20 +53,21 @@ def _along(path: np.ndarray, u: float) -> np.ndarray:
     return path[i] + (path[i + 1] - path[i]) * (x - i)
 
 
-def target_from_pose(pose, obj_info: dict, support_z: float) -> Target:
-    """The grasp library's view of a 6-D pose: footprint centre, heading, height, rest pose."""
+def target_from_pose(pose, obj_info: dict, support_z: float, variant: int = 0) -> Target:
+    """The grasp library's view of a 6-D pose: footprint centre, heading, height, rest pose (+ which grasp)."""
     h = lying_dims(pose.name)["thick"] if pose.rest == "lying" else float(obj_info[pose.name]["height"])
     return Target(pose.name, np.array([pose.centre[0], pose.centre[1], support_z]), float(pose.heading), h,
-                  rest=pose.rest)
+                  rest=pose.rest, variant=variant if pose.rest == "lying" else 0)
 
 
 class ConveyorPickSkill:
     def __init__(self, ik: ArmIK, side: str, name: str, predict, q_start: np.ndarray, hand_cmd: dict,
                  now: float, t_sync: float, belt_velocity, obj_info: dict, support_z: float, drop_xy=None,
-                 others=None):
+                 others=None, variant: int = 0):
         """`predict(t)` -> the tracker's Pose6D of the object at time t (seconds); `others(t)` -> the Targets of the
         other objects on the belt at time t (obstacles for the carry)."""
         self.others = others
+        self.variant = variant
         self.ik, self.side, self.name, self.predict = ik, side, name, predict
         self.obj_info, self.support_z, self.drop_xy = obj_info, support_z, drop_xy
         self.q = q_start.copy()
@@ -91,7 +92,7 @@ class ConveyorPickSkill:
 
     # ------------------------------------------------------------------ geometry
     def _target(self, t: float) -> Target:
-        tg = target_from_pose(self.predict(t), self.obj_info, self.support_z)
+        tg = target_from_pose(self.predict(t), self.obj_info, self.support_z, self.variant)
         tg.drop_xy = self.drop_xy
         tg.bin_top = DROP_RIM
         return tg

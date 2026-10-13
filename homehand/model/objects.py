@@ -53,6 +53,10 @@ EXTRA_OBJECTS: dict[str, ObjectSpec] = {
                    "0.85 0.2 0.2 1", half_x=0.0265, half_y=0.039, box=True, grasp="palmar_box"),
         ObjectSpec("apple", "apple", "013_apple", 0.07, ("sphere", 0.037),
                    "0.8 0.1 0.1 1", half_x=0.037, half_y=0.037, grasp="cylindrical_wrap"),
+        ObjectSpec("orange", "orange", "017_orange", 0.047, ("sphere", 0.036),
+                   "1.0 0.55 0.1 1", half_x=0.036, half_y=0.036, grasp="cylindrical_wrap"),
+        ObjectSpec("peach", "peach", "015_peach", 0.033, ("sphere", 0.03),
+                   "1.0 0.6 0.4 1", half_x=0.03, half_y=0.03, grasp="cylindrical_wrap"),
         ObjectSpec("banana", "banana", "011_banana", 0.07, ("box", 0.0545, 0.089, 0.0185),
                    "0.95 0.85 0.2 1", half_x=0.0545, half_y=0.089, box=True, grasp="cylindrical_wrap"),
         ObjectSpec("gelatin_box", "gelatin box", "009_gelatin_box", 0.10, ("box", 0.0445, 0.0505, 0.015),
@@ -60,9 +64,10 @@ EXTRA_OBJECTS: dict[str, ObjectSpec] = {
     ]
 }
 OBJECTS: dict[str, ObjectSpec] = {**TIDY_OBJECTS, **EXTRA_OBJECTS}   # every object, for looking one up by name
-# the conveyor's objects: the ones the hand takes best off the running belt (single-object trials at 3 cm/s:
-# banana 6/6, foam brick 6/6, apple 5/6, soup can 5/6; the 3 cm flat gelatin box 3/6 with any grasp, left out)
-CONVEYOR_NAMES = ["soup_can", "foam_brick", "apple", "banana"]
+# the conveyor's objects: the ones the hand takes best off the running belt. Tried and left out: the 3 cm flat gelatin
+# box (half its grasps slipped), the banana (5/8, knocked over by the closing fingers), the orange and the peach
+# (light plastic spheres: they rolled away from the closing hand)
+CONVEYOR_NAMES = ["foam_brick", "apple", "soup_can", "meat_can"]
 
 # ------------------------------------------------------------------ rest poses
 # "upright": as in the YCB frame (object z up). "lying": tipped over onto its broadest stable side. For each
@@ -81,15 +86,18 @@ LYING = {
     # grasp's palm cannot come low enough beside them (it slipped off the top of the apple and the brick)
     "apple": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.072},
     "foam_brick": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.051},
+    "orange": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.071},
+    "peach": {"quat": (1.0, 0.0, 0.0, 0.0), "axis": (0.0, 1.0, 0.0), "thickness": 0.059},
 }
 # rest poses an object takes (default both); "lying" = resting as scanned, grasped from above, for the objects that
 # take only that one
-REST_OPTIONS = {"apple": ("lying",), "foam_brick": ("lying",), "banana": ("lying",), "gelatin_box": ("lying",)}
+REST_OPTIONS = {"apple": ("lying",), "orange": ("lying",), "peach": ("lying",), "foam_brick": ("lying",),
+                "banana": ("lying",), "gelatin_box": ("lying",)}
 
 
 # objects whose grasp from above works turned by a multiple of this angle about the vertical too (0: any angle - round);
 # the grasp then takes the turn the arm reaches best
-TOP_SYMMETRY = {"apple": 0.0, "foam_brick": np.pi / 2}
+TOP_SYMMETRY = {"apple": 0.0, "orange": 0.0, "peach": 0.0, "foam_brick": np.pi / 2}
 
 
 def rest_options(name: str) -> tuple[str, ...]:

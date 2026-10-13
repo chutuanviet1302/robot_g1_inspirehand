@@ -76,7 +76,7 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
          randomization: str = "nominal",
          belt_speed: float = typer.Option(0.03, help="conveyor: belt speed in m/s (0 = stopped)"),
          objects: int = typer.Option(4, help="conveyor: objects per episode (1-4)"),
-         gap: str = typer.Option("0.25,0.35", help="conveyor: min,max metres between objects on the belt"),
+         gap: str = typer.Option("0.40,0.55", help="conveyor: min,max metres between objects on the belt"),
          replay: bool = typer.Option(None, "--replay/--live",
                                      help="simulate each episode first, then play it back smoothly (default for the "
                                           "conveyor: live viewing stalls while the controller plans)")):

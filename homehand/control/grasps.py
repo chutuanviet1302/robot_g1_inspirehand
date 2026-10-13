@@ -85,4 +85,8 @@ LYING_GRASP = {"soup_can": "lying_can_wrap", "mustard": "lying_bottle_wrap", "su
                "meat_can": "lying_block_pinch",
                # conveyor objects (they only ever lie): the banana like a lying can, the gelatin box like the sugar box
                "banana": "lying_can_wrap", "gelatin_box": "lying_block_pinch",
-               "apple": "lying_can_wrap", "foam_brick": "lying_block_pinch"}
+               "apple": "lying_block_pinch", "orange": "lying_can_wrap", "peach": "lying_can_wrap",
+               "foam_brick": "lying_block_pinch"}
+# second grasp from above, turned 90 deg against the first (fingers along the object instead of across it): taken
+# when the arm cannot reach the first at the object's heading (conveyor; lying cans otherwise rode past both hands)
+LYING_GRASP_ALT = {"soup_can": "lying_block_pinch", "meat_can": "flat_box_claw"}

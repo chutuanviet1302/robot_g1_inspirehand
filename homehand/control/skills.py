@@ -17,7 +17,7 @@ from typing import Callable
 import numpy as np
 
 from homehand.control.clearance import MARGIN, held_capsule, min_clearance, obstacle_boxes
-from homehand.control.grasps import GRASPS, LYING_GRASP, RELAXED_HAND
+from homehand.control.grasps import GRASPS, LYING_GRASP, LYING_GRASP_ALT, RELAXED_HAND
 from homehand.control.human_motion import ASYM_PEAK, asym_min_jerk, fitts_time, preshape
 from homehand.control.ik import ArmIK
 from homehand.control.safety import ARM_MAX_VEL
@@ -65,6 +65,7 @@ class Target:
     drop_xy: np.ndarray | None = None     # where the object should land in the bin (chosen by the planner)
     rest: str = "upright"                 # "upright" | "lying" (then `yaw` is the heading of its long axis)
     bin_top: float | None = None          # height of the bin's rim (default: the tidy-table bin)
+    variant: int = 0                      # 1: the alternative grasp from above (LYING_GRASP_ALT)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "pos": [round(float(v), 4) for v in self.pos], "yaw": round(self.yaw, 3),
@@ -73,6 +74,11 @@ class Target:
 
 def _bin_top(target: Target) -> float:
     return BIN_WALL_TOP if target.bin_top is None else target.bin_top
+
+
+def grasp_variants(target: Target) -> tuple[int, ...]:
+    """The grasps that can be tried for this target (0: the default one)."""
+    return (0, 1) if target.rest == "lying" and target.name in LYING_GRASP_ALT else (0,)
 
 
 def min_jerk(tau: float) -> float:
@@ -194,7 +200,7 @@ def _qrot(q) -> np.ndarray:
 def top_grasp_plan(side: str, target: Target) -> dict:
     """Grasp of a lying object from above (palm down, fingers tilted down; per-object geometry in grasps.py,
     found with scripts/top_grasp_search.py). The hand comes down vertically onto the object and closes."""
-    gt = GRASPS[LYING_GRASP[target.name]]
+    gt = GRASPS[LYING_GRASP_ALT[target.name] if target.variant else LYING_GRASP[target.name]]
     dims = lying_dims(target.name)
     thumb_heading = target.yaw if gt.align == "along" else target.yaw + np.pi / 2
     # fingers perpendicular to the thumb, pointing away from the robot ((-90, 90] deg): the only way it reaches

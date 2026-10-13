@@ -20,7 +20,7 @@ from homehand.control.conveyor_skill import HOVER_H, SYNC_TOTAL, ConveyorPickSki
 from homehand.control.grasps import RELAXED_HAND
 from homehand.control.ik import ArmIK
 from homehand.control.safety import ARM_MAX_VEL
-from homehand.control.skills import compose_action, grasp_plan
+from homehand.control.skills import compose_action, grasp_plan, grasp_variants
 from homehand.model import spec
 from homehand.model.build import CONVEYOR_BINS
 from homehand.perception.conveyor_perception import ConveyorPerception
@@ -40,8 +40,10 @@ LOOKAHEAD = 4.0                         # s ahead in which synchronisation times
 class ConveyorPlanner:
     kind = "conveyor"
 
-    def __init__(self, env, perception: str = "oracle", ik: ArmIK | None = None):
+    def __init__(self, env, perception: str = "oracle", ik: ArmIK | None = None, sides=spec.SIDES):
+        """sides: the hands that pick (both by default)."""
         self.env = env
+        self.sides = tuple(sides)
         self.ik = ik or ArmIK()
         self.perception = ConveyorPerception(env, perception)
         self.perception_mode = perception
@@ -60,6 +62,8 @@ class ConveyorPlanner:
         self.drops = {s: 0 for s in spec.SIDES}
         self.log: list[dict] = []
         self.rejects: dict = {}                    # (object, side, reason) -> count, why candidates failed
+        self.order: list[str] = []                 # objects in the order they came into view
+        self.left_ok: dict[str, bool] = {}         # can the left hand take it in its own zone (checked once)
         self.done_flag = False
 
     @property
@@ -85,7 +89,8 @@ class ConveyorPlanner:
         return max(MIN_REACH_STEPS, int(np.ceil(1.875 * dq / (0.8 * ARM_MAX_VEL * spec.CONTROL_DT))) + 2)
 
     def _candidate(self, name: str, side: str, now: float):
-        """Earliest feasible t_sync for this object and hand (scanned every SCAN s through the pick zone), or None."""
+        """(earliest feasible t_sync, grasp variant) for this object and hand (t_sync scanned every SCAN s through
+        the pick zone; at each, the default grasp first, then the alternative), or None."""
         track = self.perception.tracks[name]
         lo, hi = self._zone(side)
         v = float(track.velocity[1])
@@ -102,44 +107,78 @@ class ConveyorPlanner:
             # passage was hundreds of IK solves per look)
             times = list(np.arange(t0, min(t1, now + LOOKAHEAD) + 1e-9, SCAN))
         for t_sync in times:
-            tg = target_from_pose(track.predict(t_sync), self.env.obj_info, self.perception.support_z)
-            p = grasp_plan(side, tg)
-            # the grasp, the pre-grasp and the hover pose must all be reachable (behind an object close to the
-            # chest the pre-grasp of a side grasp is not: the reach ended 5 cm off and the IK fought the arm)
-            probe = ConveyorPickSkill.__new__(ConveyorPickSkill)
-            probe.top, probe.target, probe.support_z = p["approach"] == "top", tg, self.perception.support_z
-            pre, hover = probe._pre(p), probe._hover(p)
-            bad = None
-            for what, pos in (("grasp", p["grasp"]), ("pre", pre), ("hover", hover)):
-                q, err = self.ik.solve(self.ik.q_work, {side: (pos, p["quat"])}, iters=120)
-                if err[side] > IK_TOL:
-                    bad = what
-                    break
-            if bad is None and now + self._reach_steps(side, hover, p["quat"]) * spec.CONTROL_DT > t_sync:
-                bad = "time"                                  # the arm cannot be there in time
-            if bad is not None:
-                key = (name, side, bad)
-                self.rejects[key] = self.rejects.get(key, 0) + 1
-                continue
-            return float(t_sync)
+            pose = track.predict(t_sync)
+            for variant in grasp_variants(target_from_pose(pose, self.env.obj_info, self.perception.support_z)):
+                if self._feasible(name, side, now, t_sync, pose, variant):
+                    return float(t_sync), variant
         return None
+
+    def _feasible(self, name: str, side: str, now: float, t_sync: float, pose, variant: int) -> bool:
+        tg = target_from_pose(pose, self.env.obj_info, self.perception.support_z, variant)
+        p = grasp_plan(side, tg)
+        # the grasp, the pre-grasp and the hover pose must all be reachable (behind an object close to the
+        # chest the pre-grasp of a side grasp is not: the reach ended 5 cm off and the IK fought the arm)
+        probe = ConveyorPickSkill.__new__(ConveyorPickSkill)
+        probe.top, probe.target, probe.support_z = p["approach"] == "top", tg, self.perception.support_z
+        pre, hover = probe._pre(p), probe._hover(p)
+        bad = None
+        for what, pos in (("grasp", p["grasp"]), ("pre", pre), ("hover", hover)):
+            q, err = self.ik.solve(self.ik.q_work, {side: (pos, p["quat"])}, iters=120)
+            if err[side] > IK_TOL:
+                bad = what
+                break
+        if bad is None and now + self._reach_steps(side, hover, p["quat"]) * spec.CONTROL_DT > t_sync:
+            bad = "time"                                  # the arm cannot be there in time
+        if bad is not None:
+            key = (name, side, bad)
+            self.rejects[key] = self.rejects.get(key, 0) + 1
+            return False
+        return True
+
+    def _left_can_take(self, name: str, now: float) -> bool:
+        """Whether the left hand reaches the object (grasp, pre-grasp, hover) when it is in the middle of the left
+        hand's zone, at its current heading."""
+        if name not in self.left_ok:
+            track = self.perception.tracks[name]
+            pose = track.predict(now)
+            shift = np.array([0.0, float(np.mean(ZONE)) - float(pose.centre[1]), 0.0])
+            pose = type(pose)(pose.name, pose.pos + shift, pose.R, pose.rmse, pose.inliers, pose.n_points, pose.rest,
+                              pose.heading, pose.centre + shift)
+            ok = False
+            for variant in grasp_variants(target_from_pose(pose, self.env.obj_info, self.perception.support_z)):
+                tg = target_from_pose(pose, self.env.obj_info, self.perception.support_z, variant)
+                p = grasp_plan("left", tg)
+                probe = ConveyorPickSkill.__new__(ConveyorPickSkill)
+                probe.top, probe.target, probe.support_z = p["approach"] == "top", tg, self.perception.support_z
+                ok = ok or all(
+                    self.ik.solve(self.ik.q_work, {"left": (pos, p["quat"])}, iters=120)[1]["left"] <= IK_TOL
+                    for pos in (p["grasp"], probe._pre(p), probe._hover(p)))
+            self.left_ok[name] = ok
+        return self.left_ok[name]
 
     def _choose(self, now: float, sides):
         best = None
         for name, track in self.perception.tracks.items():
+            if name not in self.order:
+                self.order.append(name)
             if name in self.taken or track.n_updates < 2:
                 continue
             for side in sides:
+                # the hands take turns: every second object rides on to the left hand (the belt brings everything
+                # past the right hand first, which would otherwise take nearly all), unless the left cannot take it
+                if (side == "right" and len(self.sides) == 2 and self.order.index(name) % 2 == 1
+                        and self._left_can_take(name, now)):
+                    continue
                 key = (name, side)
                 # an object/hand pair found infeasible is looked at again only RECHECK s later (each look is up
                 # to a few dozen IK solves)
                 if now < self.infeasible_until.get(key, -1.0):
                     continue
-                t_sync = self._candidate(name, side, now)
-                if t_sync is None:
+                cand = self._candidate(name, side, now)
+                if cand is None:
                     self.infeasible_until[key] = now + RECHECK
-                if t_sync is not None and (best is None or t_sync < best[0]):
-                    best = (t_sync, name, side)
+                elif best is None or cand[0] < best[0]:
+                    best = (cand[0], name, side, cand[1])
         return best
 
     def _others(self, name: str, t: float) -> list:
@@ -149,25 +188,25 @@ class ConveyorPlanner:
 
     # ------------------------------------------------------------------ loop
     def _start(self, choice, obs: dict, t: float) -> None:
-        t_sync, name, side = choice
+        t_sync, name, side, variant = choice
         track = self.perception.tracks[name]
-        tg = target_from_pose(track.predict(t_sync), self.env.obj_info, self.perception.support_z)
+        tg = target_from_pose(track.predict(t_sync), self.env.obj_info, self.perception.support_z, variant)
         dx, din = DROP_OFFSETS[self.drops[side] % len(DROP_OFFSETS)]
         bx, by = CONVEYOR_BINS[side]
         drop = np.array([bx + dx, by - np.sign(by) * din])
         self.drops[side] += 1
         self.skills[side] = ConveyorPickSkill(self.ik, side, name, track.predict, self.q, self.hand_cmd, t, t_sync,
                                               track.velocity, self.env.obj_info, self.perception.support_z, drop,
-                                              others=lambda tt, name=name: self._others(name, tt))
+                                              others=lambda tt, name=name: self._others(name, tt), variant=variant)
         self.taken.add(name)
         self.log.append({"t": obs["t"], "event": "pick", "object": name, "side": side,
-                         "t_sync": round(t_sync, 2), "rest": tg.rest})
+                         "t_sync": round(t_sync, 2), "rest": tg.rest, "grasp": variant})
 
     def act(self, obs: dict) -> np.ndarray:
         t = obs["t"] * spec.CONTROL_DT
         if obs["t"] % PERCEIVE_EVERY == 0:
             self.perception.update(t)
-            for side in spec.SIDES:                         # an idle hand takes the next object it can
+            for side in self.sides:                         # an idle hand takes the next object it can
                 if self.skills[side] is None:
                     choice = self._choose(t, [side])
                     if choice is not None:

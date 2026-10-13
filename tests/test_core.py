@@ -401,7 +401,7 @@ def test_pose6d_from_one_view_and_tracking():
     # tracking on the running belt (the perception pipeline: no fits at the image edge, refits when lost)
     from homehand.perception.conveyor_perception import ConveyorPerception
     per = ConveyorPerception(env, "oracle")
-    env.reset(seed=3, speed=0.04, objects=["foam_brick", "banana"])
+    env.reset(seed=3, speed=0.04, objects=["foam_brick", "meat_can"])
     per.reset((0.0, 0.04))
     checked = 0
     for k in range(400):

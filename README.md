@@ -267,8 +267,9 @@ randomised with the same presets as the main task.
 **Conveyor task** (`homehand/env/conveyor_env.py`, `homehand/perception/pose6d.py`, `tracker.py`,
 `homehand/control/conveyor_planner.py`, `conveyor_skill.py`; its own scene file). A belt runs across the counter
 in front of the chest (3 cm/s by default; a slab on a slide joint driven at constant speed, so objects ride it by
-real friction) and carries hand-sized YCB objects — tomato soup can (upright or lying), foam brick, apple, banana —
-at random headings into the robot's reach; a 20 cm deep bin stands at each hip. It never stops:
+real friction) and carries hand-sized YCB objects — foam brick, apple, tomato soup can and potted meat can (the
+cans upright or lying) — at random headings into the robot's reach; a 20 cm deep bin stands at each hip. It never
+stops:
 * **6-D pose from the head camera**: mask (oracle segmentation or YOLO) + depth → point cloud → point-to-point
   ICP against the camera-facing points of the YCB mesh, from 8–16 initial guesses (footprint fit, turns, flips
   for objects that can lie upside down); while tracking, ICP from the predicted pose, with a full search every
@@ -277,13 +278,19 @@ at random headings into the robot's reach; a 20 cm deep bin stands at each hip. 
   fit must not swing the velocity: the hand aims 5 s ahead).
 * **Interception**: for each idle hand and each tracked object, the earliest time at which the object is inside
   that hand's zone, the grasp, pre-grasp and hover poses have IK solutions, and the arm can be there in time;
-  round or two-fold symmetric objects take the grasp turn the arm reaches best. Both hands work at once.
+  round or two-fold symmetric objects take the grasp turn the arm reaches best, and a lying can whose default
+  grasp from above is out of reach at its heading is taken with a second grasp turned 90° (fingers along it).
+  Both hands work at once and **take turns**: every second object rides on past the right hand to the left one
+  (the belt brings everything past the right hand first), unless the left cannot reach it; an object the right
+  hand misses is still taken by the left. Each hand drops into the bin on its own side.
 * **Picking on the move**: the arm reaches where the object will be, then descends, closes and lifts in the
   object's moving frame on a pre-planned joint path (warm-started IK per step), replanned when the prediction
   shifts by > 1 cm; a path that stretches too long or misses its targets aborts and frees the object for
   another try. The carry follows a Cartesian path to the bin and the object is dropped in.
-The gelatin box (a 3 cm flat box) was tried and left out: about half of its grasps from above slipped, whatever
-the grasp type.
+Objects tried and left out (MuJoCo 3.15, camera poses): banana 5/8 (knocked over by the closing fingers), orange
+0/8 and peach (light plastic spheres that roll away from the closing hand), gelatin box (a 3 cm flat box: about
+half of its grasps slipped, whatever the grasp type). The apple is taken with the pinch grasp of the foam brick
+(20/20 single-object trials against 15/20 with the can wrap).
 
 **ROS 2** (`ros2/homehand_ros`, Humble, ament_python; Docker: `ros2/Dockerfile`, compose service `ros`). Three
 nodes: `sim_bridge` (publishes `/joint_states` and the observation, applies `/joint_command`, reports the outcome
@@ -396,21 +403,22 @@ nominal, 50 episodes): **56 % [42–69] clean, 83 % [77–88] of the objects, 2 
 validation action MSE 0.0117 (ACT 0.0106, Diffusion 0.041). Caveat: ACT and Diffusion were evaluated before the
 planner changes above (grasp order), flow matching after them.
 
-**Conveyor picking** (`python scripts/conveyor_eval.py`, belt at 3 cm/s, objects 40–55 cm apart, both hands,
-nominal physics; raw data `data/conveyor_eval_*.json`):
+**Conveyor picking** (`python scripts/conveyor_eval.py`, belt at 3 cm/s, objects 40–55 cm apart, both hands
+taking turns, nominal physics, MuJoCo 3.15; raw data `data/conveyor_eval_*.json`):
 
 | pose source | objects per episode | objects in the bin | clean episodes | protective stops |
 |---|---|---|---|---|
-| ground truth | 4 (8 ep.) | 27/32 — 84 % [68–93] | 5/8 | 0 |
-| **6-D pose from the camera** (oracle masks + ICP) | 4 (8 ep.) | **27/32 — 84 % [68–93]** | 3/8 | 0 |
-| ground truth | 2 (10 ep.) | 19/20 — 95 % [76–99] | 9/10 | 0 |
+| ground truth | 4 (8 ep.) | 28/32 — 88 % [72–95] | 4/8 | 0 |
+| **6-D pose from the camera** (oracle masks + ICP) | 4 (8 ep.) | **28/32 — 88 % [72–95]** | 5/8 | 0 |
+| ground truth | 2 (10 ep.) | 17/20 — 85 % [64–95] | 7/10 | 0 |
 | 6-D pose from the camera | 2 (10 ep.) | 17/20 — 85 % [64–95] | 7/10 | 0 |
 
-Per object (4 per episode, camera pose): foam brick 8/8, apple 7/8, soup can 6/8, banana 6/8. Losses: objects
-that ride past (no hand reaches the grasp at their heading in time) and objects knocked over by the closing
-fingers. With camera poses the banana is the hardest (its long, gently curved shape seen from one side lets ICP
-slide along it). Not yet measured: YOLO masks (the detector was trained on the tidy-table objects only) and
-other belt speeds.
+Per object (4 per episode, camera pose): foam brick 8/8, apple 8/8, soup can 6/8, potted meat can 6/8. Losses:
+lying cans that ride past (no hand reaches either grasp at their heading in time), cans knocked over by the
+closing fingers, and once two cans dropped on the way to the bin. Single-object trials (ground-truth pose, 16–24
+per object): soup can 15/16, meat can 21/24, apple 20/20 (10/10 with each hand). Not yet measured: YOLO masks (the detector was
+trained on the tidy-table objects only) and other belt speeds. (Earlier numbers in this section were measured by
+mistake on MuJoCo 3.11; the project environment is MuJoCo 3.15.)
 
 ## Licences
 

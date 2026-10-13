@@ -192,7 +192,7 @@ YOLOv8n-seg on held-out synthetic images: box mAP50 0.995 (mAP50-95 0.993), mask
 
 | pose source | belt speed | objects / episode | episodes | objects in the bin | clean episodes | per object | protective stops |
 |---|---|---|---|---|---|---|---|
-| ground_truth | 3 cm/s | 2 | 10 | 95% [76–99] | 9/10 | apple 4/4, banana 5/6, foam_brick 4/4, soup_can 6/6 | 0 |
-| ground_truth | 3 cm/s | 4 | 8 | 84% [68–93] | 5/8 | apple 7/8, banana 5/8, foam_brick 8/8, soup_can 7/8 | 0 |
-| oracle | 3 cm/s | 2 | 10 | 85% [64–95] | 7/10 | apple 3/4, banana 5/6, foam_brick 4/4, soup_can 5/6 | 0 |
-| oracle | 3 cm/s | 4 | 8 | 84% [68–93] | 3/8 | apple 7/8, banana 6/8, foam_brick 8/8, soup_can 6/8 | 0 |
+| ground_truth | 3 cm/s | 2 | 10 | 85% [64–95] | 7/10 | apple 4/4, foam_brick 6/6, meat_can 5/6, soup_can 2/4 | 0 |
+| ground_truth | 3 cm/s | 4 | 8 | 88% [72–95] | 4/8 | apple 8/8, foam_brick 8/8, meat_can 6/8, soup_can 6/8 | 0 |
+| oracle | 3 cm/s | 2 | 10 | 85% [64–95] | 7/10 | apple 4/4, foam_brick 6/6, meat_can 5/6, soup_can 2/4 | 0 |
+| oracle | 3 cm/s | 4 | 8 | 88% [72–95] | 5/8 | apple 8/8, foam_brick 8/8, meat_can 6/8, soup_can 6/8 | 0 |
