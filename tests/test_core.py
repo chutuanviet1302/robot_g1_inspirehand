@@ -341,6 +341,39 @@ def test_bimanual_expert_lifts_the_box():
     assert not env.safety.stats.protective_stop
 
 
+def _conveyor_scene():
+    from homehand import paths
+    if not paths.CONVEYOR_XML.exists():
+        from homehand.model.build import build_conveyor_scene
+        build_conveyor_scene()
+
+
+def test_conveyor_carries_objects_at_belt_speed():
+    """Objects ride the belt by friction at its speed, straight (no drift across it), and leave at the far end
+    as `missed` when nobody picks them; with the belt stopped they stay put."""
+    _conveyor_scene()
+    from homehand.env.conveyor_env import ConveyorEnv
+    env = ConveyorEnv()
+    env.reset(seed=0, speed=0.04, objects=["meat_can", "soup_can"])
+    track = []
+    done = False
+    while not done:
+        _, done = env.step(env.home_ctrl)
+        if "meat_can" in env.tracks:
+            p = env.object_pose("meat_can")[0]
+            if -0.3 < p[1] < 0.3:
+                track.append((env.t, p[0], p[1]))
+    a = np.array(track)
+    speed = (a[-1, 2] - a[0, 2]) / ((a[-1, 0] - a[0, 0]) * 0.04)
+    assert abs(speed - 0.04) < 0.002 and np.ptp(a[:, 1]) < 0.005
+    assert env.info.object_outcomes == {"meat_can": "missed", "soup_can": "missed"}
+    env.reset(seed=0, speed=0.0, objects=["meat_can"])
+    p0 = env.object_pose("meat_can")[0]
+    for _ in range(50):
+        env.step(env.home_ctrl)
+    assert np.linalg.norm(env.object_pose("meat_can")[0] - p0) < 0.002
+
+
 def test_grip_env_reward_terms():
     pytest.importorskip("gymnasium")
     from homehand import paths

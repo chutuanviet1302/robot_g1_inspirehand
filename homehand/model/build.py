@@ -64,6 +64,7 @@ def build(out_dir=None, source: str = "auto") -> None:
         build_from_repo(out_dir)
         build_scene(out_dir)
         build_bimanual_scene(out_dir)
+        build_conveyor_scene(out_dir)
         print(f"[build] robot from {paths.REPO_MODEL_DIR.name}; wrote {out_dir / paths.ROBOT_XML.name}, scene and objects")
         return
     if not paths.G1_DIR.exists() or not paths.INSPIRE_DIR.exists():
@@ -200,6 +201,7 @@ def build(out_dir=None, source: str = "auto") -> None:
     tree.write(out_dir / paths.ROBOT_XML.name)
     build_scene(out_dir)
     build_bimanual_scene(out_dir)
+    build_conveyor_scene(out_dir)
     print(f"[build] wrote {out_dir / paths.ROBOT_XML.name}, {paths.SCENE_XML.name}, {paths.OBJECTS_JSON.name}")
 
 
@@ -296,3 +298,50 @@ def build_bimanual_scene(out_dir=None) -> None:
     tree.write(out_dir / paths.BIMANUAL_XML.name)
     print(f"[build] wrote {out_dir / paths.BIMANUAL_XML.name}")
 
+
+# Conveyor task: a belt across the counter in front of the chest (along y), just in front of the bin. The belt is a
+# long slab on a slide joint driven at constant speed by a velocity actuator: objects ride it by real friction (no
+# rolling, no drift) and a hand holding one has to overcome exactly that friction. It is BELT_PERIOD longer than the
+# visible belt; `env.conveyor_env` shifts it back by BELT_PERIOD whenever it has run that far (a flat surface under
+# the objects either way, and friction only sees velocities).
+# Visible belt: from the counter edge (x 0.20: an object hanging over it is in the air, not dragged by the counter)
+# to the bin.
+BELT_X, BELT_HALF_W, BELT_HALF_L, BELT_THICK = 0.315, 0.115, 0.60, 0.002
+BELT_PERIOD = 0.6
+
+
+def build_conveyor_scene(out_dir=None) -> None:
+    out_dir = Path(out_dir or paths.GENERATED_DIR)
+    tree = ET.parse(out_dir / paths.SCENE_XML.name)
+    root = tree.getroot()
+    world = root.find("worldbody")
+    # slab bottom 0.5 mm above the counter: the slide joint holds its height, so they never touch
+    z = 0.80 + 0.0005 + BELT_THICK / 2
+    half_len = BELT_HALF_L + BELT_PERIOD / 2
+    body = ET.SubElement(world, "body", name="conveyor", pos=f"{BELT_X} {-BELT_PERIOD / 2} {z}")
+    ET.SubElement(body, "joint", name="belt_slide", type="slide", axis="0 1 0", damping="0")
+    ET.SubElement(body, "inertial", pos="0 0 0", mass="40", diaginertia="1 1 1")
+    ET.SubElement(body, "geom", name="belt", type="box", size=f"{BELT_HALF_W} {half_len} {BELT_THICK / 2}",
+                  rgba="0.18 0.18 0.2 1", friction="1.0 0.005 0.0001", mass="0")
+    n = int(2 * half_len / 0.1)
+    for i in range(n):   # cross stripes, visual only: they show the belt moving
+        ET.SubElement(body, "geom", type="box", size=f"{BELT_HALF_W - 0.005} 0.006 0.0002",
+                      pos=f"0 {-half_len + 0.05 + 0.1 * i:.3f} {BELT_THICK / 2}", rgba="0.32 0.32 0.35 1",
+                      contype="0", conaffinity="0", group="2", mass="0")
+    for sgn in (-1, 1):   # side rails on the counter, visual only (they would block the fingers)
+        ET.SubElement(world, "geom", type="box", size=f"0.004 {BELT_HALF_L} 0.004",
+                      pos=f"{BELT_X + sgn * (BELT_HALF_W + 0.004)} 0 0.804", rgba="0.6 0.6 0.62 1",
+                      contype="0", conaffinity="0", group="2")
+    # the slab overlaps the bin's near wall and sits on the counter: it only has to touch objects and hands
+    contact = root.find("contact")
+    if contact is None:
+        contact = ET.SubElement(root, "contact")
+    for other in ("bin", "world"):
+        ET.SubElement(contact, "exclude", body1="conveyor", body2=other)
+    act = root.find("actuator")
+    if act is None:
+        act = ET.SubElement(root, "actuator")
+    ET.SubElement(act, "velocity", name="belt_drive", joint="belt_slide", kv="4000", ctrlrange="-0.2 0.2")
+    ET.indent(tree)
+    tree.write(out_dir / paths.CONVEYOR_XML.name)
+    print(f"[build] wrote {out_dir / paths.CONVEYOR_XML.name}")

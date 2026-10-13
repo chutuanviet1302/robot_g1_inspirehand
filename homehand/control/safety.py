@@ -51,6 +51,7 @@ class SafetyStats:
 class SafetyLayer:
     def __init__(self, model: mujoco.MjModel, act_ids: np.ndarray, palm_sites: dict, dt: float = spec.CONTROL_DT):
         self.model = model
+        self.env_bodies: set[int] = set()   # moving parts of the environment (a conveyor belt) counted as such
         lo = model.actuator_ctrlrange[act_ids, 0].copy()
         hi = model.actuator_ctrlrange[act_ids, 1].copy()
         margin = LIMIT_MARGIN * (hi - lo)
@@ -110,7 +111,7 @@ class SafetyLayer:
                 hard = "arm-torso contact"
             elif r1 != r2:
                 other = b2 if r1 else b1
-                if m.body_dofnum[other] == 0:  # static environment (counter, bin), not a held object
+                if m.body_dofnum[other] == 0 or other in self.env_bodies:  # environment (counter, bin, belt), not a held object
                     mujoco.mj_contactForce(m, data, i, fr)
                     env_force += abs(fr[0])
         self.stats.max_contact_force = max(self.stats.max_contact_force, env_force)
