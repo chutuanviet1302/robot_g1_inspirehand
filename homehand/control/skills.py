@@ -16,7 +16,7 @@ from typing import Callable
 
 import numpy as np
 
-from homehand.control.clearance import MARGIN, min_clearance, obstacle_boxes
+from homehand.control.clearance import MARGIN, held_capsule, min_clearance, obstacle_boxes
 from homehand.control.grasps import GRASPS, LYING_GRASP, RELAXED_HAND
 from homehand.control.human_motion import ASYM_PEAK, asym_min_jerk, fitts_time, preshape
 from homehand.control.ik import ArmIK
@@ -38,6 +38,10 @@ KEEP_YAW = True
 # "v1": every primitive starts and stops at rest and the hand changes shape with it (the expert until 2026-10)
 EXPERT_STYLE = os.environ.get("HOMEHAND_EXPERT_STYLE", "human")
 BLEND_APPROACH = os.environ.get("HOMEHAND_BLEND_APPROACH", "0") == "1"   # blended into the final approach, the PD-tracked hand cut the corner and pushed tall objects (5 of 50 episodes)
+TALL_H = 0.15               # m: upright objects taller than this tip over at a touch
+TARGET_EXTRA = 0.015       # m: extra clearance kept from the object being approached, while coming down behind it
+BACKOFF_ADAPT = os.environ.get("HOMEHAND_BACKOFF_ADAPT", "1") == "1"
+RETREAT_H = 0.08            # m: the open hand rises this far straight out of the bin after the release
 REACH_Z = 1.03              # palm height above the pre-grasp point (tallest object top: 0.99 m; higher is out of reach near the chest)
 
 
@@ -234,12 +238,30 @@ class PickPlaceSkill:
 
     DROP_RAISE_STEP = 0.03      # m: the release point goes up by this much while the forearm would touch an object
     DROP_RAISE_MAX = 0.09
+    RETURN_RAISE_STEP = 0.04    # m: same for the way back from the bin
+    RETURN_RAISE_MAX = 0.12
+    BACKOFF_STEP = 0.02         # m: side grasps start the approach further back while the open fingers, coming
+    BACKOFF_MAX = 0.06          # down behind the object, would touch its top (tall boxes / bottles)
+
+    # groups of segments during which the object is in the hand (its capsule joins the arm probes)
+    HOLDING = {"lift", "transport", "drop"}
 
     def __init__(self, ik: ArmIK, side: str, target: Target, q_start: np.ndarray, hand_cmd: dict,
-                 obstacles: list | None = None):
+                 obstacles: list | None = None, inflate: float = 0.0):
         self.ik, self.side, self.target = ik, side, target
-        self.obstacles = obstacle_boxes(obstacles or []) if EXPERT_STYLE != "v1" else []
+        self.obstacles = obstacle_boxes(obstacles or [], inflate) if EXPERT_STYLE != "v1" else []
+        self.clearance: dict[str, float] = {}     # planned clearance to the other objects, per movement
         self.drop_raise = 0.0
+        self.return_raise = 0.0   # m: the arm leaves the bin higher when the way back would brush an object
+        self.back_extra = 0.0     # m: added to the approach back-off (side grasps)
+        # the object itself is an obstacle until the hand is behind it, ready to move in
+        # (grown by TARGET_EXTRA: the PD-tracked arm and the opening fingers ran ~1 cm closer than planned)
+        # only its top counts: the fingers must not come down onto it, they do end up beside it. Only for tall
+        # upright objects: a light touch tips a sugar box or a mustard bottle over, not a squat can
+        tall = target.rest == "upright" and target.height > TALL_H
+        self.target_box = None
+        if EXPERT_STYLE != "v1" and tall:
+            self.target_box = (*obstacle_boxes([target], inflate + TARGET_EXTRA)[0], "top")
         self.q = q_start.copy()
         self.hand_cmd = {s: np.asarray(v, float).copy() for s, v in hand_cmd.items()}
         self.status = "running"  # -> "placed" | "empty_grasp"
@@ -249,6 +271,10 @@ class PickPlaceSkill:
         quat, dq, gt = p["quat"], p["drop_quat"], p["grasp_type"]
         self.grasp_type = gt
         g, back = p["grasp"], np.array([*p["back"], 0.0])
+
+        def pre_side():
+            return g + back * (1.0 + self.back_extra / APPROACH_BACKOFF)
+        self.held = held_capsule(obstacle_boxes([target])[0], g, _qrot(quat))
         open_, closed = gt.open_cmd(), gt.closed_cmd()
         relaxed = RELAXED_HAND
         home_pos, home_quat = ik.palm_pose(ik.q_home, side)
@@ -272,7 +298,8 @@ class PickPlaceSkill:
                 self.status = "empty_grasp"
                 self.plan[1:] = [
                     Segment("open", here, open_, min_steps=8),
-                    Segment("back_off", fixed(p.get("pre", g + back)), open_, speed=FINE_SPEED, min_steps=8),
+                    Segment("back_off", lambda: (p["pre"] if "pre" in p else pre_side(), quat), open_, speed=FINE_SPEED,
+                            min_steps=8),
                     Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=15,
                             via=lambda: [high(g + back)], joint_space=True, final_q=lambda: ik.q_home),
                 ]
@@ -289,6 +316,23 @@ class PickPlaceSkill:
         def drop_pose():
             return drop + np.array([0.0, 0.0, self.drop_raise]), dq
 
+        def leave_bin() -> list[Segment]:
+            # straight up out of the bin with the hand still open (a joint-space move from the release point
+            # let the thumb, curling into the relaxed pose, flick a just-dropped can back out of the bin), then
+            # a smooth arc back to the ready pose
+            def up():
+                return drop_pose()[0] + np.array([0.0, 0.0, RETREAT_H]), dq
+            if os.environ.get("HOMEHAND_RETREAT", "1") != "1":      # the expert until 2026-10-12
+                return [Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=20,
+                                via=lambda: [drop + [0, 0, 0.08], [drop[0] - 0.06, drop[1], RETURN_Z], above_home],
+                                joint_space=True, final_q=lambda: ik.q_home)]
+            return [
+                Segment("retreat", up, open_, speed=0.25, min_steps=6, blend_next=True),
+                Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=20,
+                        via=lambda: [[up()[0][0] - 0.06, up()[0][1], RETURN_Z + self.return_raise], above_home],
+                        joint_space=True, final_q=lambda: ik.q_home),
+            ]
+
         if p["approach"] == "top":
             pre = p["pre"]
             self.plan = [
@@ -304,17 +348,16 @@ class PickPlaceSkill:
                 Segment("transport", drop_pose, closed, speed=0.3, min_steps=24, hold_steps=2,
                         via=lambda: [high(drop)], joint_space=True),
                 Segment("drop", drop_pose, open_, min_steps=6, hold_steps=6, on_end=placed),
-                Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=20,
-                        via=lambda: [drop + [0, 0, 0.08], [drop[0] - 0.06, drop[1], RETURN_Z], above_home],
-                        joint_space=True, final_q=lambda: ik.q_home),
+                *leave_bin(),
             ]
             self._start()
             return
         self.plan: list[Segment] = [
             # swing the arm (joint space) to above the pre-grasp point, then come down vertically behind the object
-            Segment("reach", fixed([*(g + back)[:2], REACH_Z]), open_, min_steps=20, joint_space=True,
-                    blend_next=True),
-            Segment("descend", fixed(g + back), open_, speed=0.25, min_steps=8, blend_next=BLEND_APPROACH),
+            Segment("reach", lambda: (np.array([*pre_side()[:2], REACH_Z]), quat), open_, min_steps=20,
+                    joint_space=True, blend_next=True),
+            Segment("descend", lambda: (pre_side(), quat), open_, speed=0.25, min_steps=8,
+                    blend_next=BLEND_APPROACH),
             Segment("approach", fixed(g), open_, speed=FINE_SPEED, min_steps=10, hold_steps=2),
             Segment("grasp", fixed(g), closed, min_steps=15, hold_steps=5, on_end=check_grasp),
             # lift straight up (the object must not drag over the counter), then swing over to the bin and come
@@ -323,10 +366,7 @@ class PickPlaceSkill:
             Segment("transport", drop_pose, closed, speed=0.3, min_steps=24, hold_steps=2,
                     via=lambda: [high(drop)], joint_space=True),
             Segment("drop", drop_pose, open_, min_steps=6, hold_steps=6, on_end=placed),
-            # straight up out of the bin first, then a smooth arc back to the ready pose
-            Segment("return", lambda: (home_pos, home_quat), relaxed, min_steps=20,
-                    via=lambda: [drop + [0, 0, 0.08], [drop[0] - 0.06, drop[1], RETURN_Z], above_home], joint_space=True,
-                    final_q=lambda: ik.q_home),
+            *leave_bin(),
         ]
         self._start()
 
@@ -357,20 +397,45 @@ class PickPlaceSkill:
         q0 = self.q.copy()
         start_palm = self.ik.palm_pose(q0, self.side)[0]
         paths, costs, q = self._plan_group(group, q0)
-        if self.obstacles and any(s.name == "transport" for s in group):
-            # carrying to the bin: the forearm slopes down behind the hand; if it would touch an object left on
-            # the counter, release from higher up (as long as the arm still reaches the release point)
-            clear = min_clearance(self.ik, np.vstack(paths), self.side, self.obstacles)
-            while clear < MARGIN and self.drop_raise < self.DROP_RAISE_MAX - 1e-9:
-                self.drop_raise += self.DROP_RAISE_STEP
-                cand = self._plan_group(group, q0)
-                goal = group[-1].goal()[0]
-                err = float(np.linalg.norm(self.ik.palm_pose(cand[2], self.side)[0] - goal))
-                c2 = min_clearance(self.ik, np.vstack(cand[0]), self.side, self.obstacles)
-                if err > 0.01 or c2 <= clear:
-                    self.drop_raise -= self.DROP_RAISE_STEP
-                    break
-                paths, costs, q, clear = *cand, c2
+        names = {s.name for s in group}
+        boxes = list(self.obstacles)
+        if self.target_box is not None and names & {"reach", "descend"}:
+            boxes.append(self.target_box)
+        if boxes:
+            held = self.held if group[0].name in self.HOLDING and self.status != "empty_grasp" else None
+            clear = min_clearance(self.ik, np.vstack(paths), self.side, boxes, held=held,
+                                  hands=self._hands(group, paths))
+            # carrying to the bin: the forearm slopes down behind the hand; if it (or the carried object) would
+            # touch an object left on the counter, release from higher up (as long as the arm still reaches);
+            # on the way back, leave the bin higher
+            if "transport" in names:
+                knob = ("drop_raise", self.DROP_RAISE_STEP, self.DROP_RAISE_MAX)
+            elif "descend" in names and self.plan_info["approach"] == "side" and BACKOFF_ADAPT:
+                knob = ("back_extra", self.BACKOFF_STEP, self.BACKOFF_MAX)
+            elif "return" in names and self.status == "placed":
+                knob = ("return_raise", self.RETURN_RAISE_STEP, self.RETURN_RAISE_MAX)
+            else:
+                knob = None
+            if knob and clear < MARGIN:
+                # try every setting (the clearance is not monotonic in it: backing off 2 cm brought the fingers
+                # closer to a tall box, 6 cm cleared it); the first that clears wins, else the best reachable one
+                name, step, top = knob
+                best = (clear, getattr(self, name), (paths, costs, q))
+                for k in range(1, int(round(top / step)) + 1):
+                    setattr(self, name, k * step)
+                    cand = self._plan_group(group, q0)
+                    goal = group[-1].goal()[0]
+                    if float(np.linalg.norm(self.ik.palm_pose(cand[2], self.side)[0] - goal)) > 0.01:
+                        continue
+                    c2 = min_clearance(self.ik, np.vstack(cand[0]), self.side, boxes, held=held,
+                                       hands=self._hands(group, cand[0]))
+                    if c2 > best[0]:
+                        best = (c2, k * step, cand)
+                    if c2 >= MARGIN:
+                        break
+                clear, value, (paths, costs, q) = best
+                setattr(self, name, value)
+            self.clearance["+".join(s.name for s in group)] = round(clear, 4)
         self.q_path = np.vstack(paths)
         cost = np.concatenate(costs)
         self.u = np.r_[0.0, np.cumsum(cost)]
@@ -391,6 +456,15 @@ class PickPlaceSkill:
         self.seg_hand_start = [self.hand_start]
         for seg in group[:-1]:
             self.seg_hand_start.append(np.asarray(seg.hand, float) if seg.hand is not None else self.seg_hand_start[-1])
+
+    def _hands(self, group: list[Segment], paths: list[np.ndarray]) -> np.ndarray:
+        """Hand command along a planned group (each segment's target shape: open while reaching, closed while
+        carrying), for the clearance check."""
+        out, h = [], self.hand_cmd[self.side]
+        for seg, qp in zip(group, paths):
+            h = np.asarray(seg.hand, float) if seg.hand is not None else h
+            out.append(np.tile(h, (len(qp), 1)))
+        return np.vstack(out)
 
     def _plan_group(self, group: list[Segment], q0: np.ndarray):
         paths, costs, q = [], [], q0

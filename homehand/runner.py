@@ -60,6 +60,7 @@ def run_episode(env: KitchenEnv, controller: TidyPlanner, task: str = "tidy_tabl
         "log": _jsonable(controller.log),
         "events": _jsonable(env.events + env.safety.stats.events),
         "safety": _jsonable(env.safety.stats.to_dict()),
+        "causes": _jsonable(info.details.get("causes", {})),
         "layout": [list(map(lambda v: v if isinstance(v, str) else round(float(v), 4), l)) for l in env.layout],
     }
 

@@ -87,7 +87,7 @@ def run_trial(trial: tuple) -> dict:
     elif st["closed_pos"] is not None and np.linalg.norm(st["closed_pos"][:2] - st["start"][:2]) > 0.02 \
             and not st["lifted"]:
         mode = "pushed"
-    elif st["lifted"] and st["release_phase"] not in ("drop", "return", "done", None):
+    elif st["lifted"] and st["release_phase"] not in ("drop", "retreat", "return", "done", None):
         mode = "slipped"
     elif st["lifted"]:
         mode = "bounced"

@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 learn = ["torch>=2.2", "ultralytics>=8.2", "opencv-python-headless", "imageio", "imageio-ffmpeg"]
+rl = ["stable-baselines3==2.5.0", "gymnasium==1.0.0", "pandas"]   # pinned: newer SB3 pulls torch >= 2.8
 dev = ["pytest", "httpx"]
 
 [project.scripts]

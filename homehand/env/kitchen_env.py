@@ -25,6 +25,7 @@ from homehand.model import spec
 from homehand.model.objects import CLASS_NAMES, LYING, OBJECTS, body_pose_for, lying_dims, rest_of
 
 TABLE_Z = 0.80
+FINGERS = ("thumb", "index", "middle", "ring", "pinky")
 BIN_XY = np.array([0.56, 0.0])   # as close as the objects allow: the G1 palm reaches x ~ 0.46 m at drop height
 BIN_HALF_INNER = np.array([0.135, 0.15])
 BIN_WALL_TOP = TABLE_Z + 0.10
@@ -81,6 +82,17 @@ class ObjectTrack:
     last_release_xy: np.ndarray | None = None
     tipped: bool = False
     up0: np.ndarray | None = None
+    pos0: np.ndarray | None = None
+    # failure attribution: who first moved the object before it was ever lifted, and how it left the hand
+    last_toucher: str | None = None      # last non-counter body in contact (robot link, other object, bin)
+    disturbed: dict | None = None        # {t, by, phase, target, was_target, shift, tilt_deg}
+    release: dict | None = None          # {t, phase, palm_speed, lift} of the last release
+    last_touch_t: int = -1
+    last_robot: str | None = None        # last robot link in contact, and when
+    last_robot_t: int = -1
+    tipped_info: dict | None = None      # {t, by, phase, ...} when it tipped / fell off the counter
+    was_in_bin: bool = False
+    left_bin: dict | None = None         # {t, by, phase}: it had landed in the bin and came out again
 
     def outcome(self, in_bin: bool) -> str:
         if in_bin and not self.in_hand:
@@ -144,6 +156,16 @@ class KitchenEnv:
         }
         self.body_side = {b: s for s, bs in self.hand_bodies.items() for b in bs}
         self.finger_geoms = np.array([g for g in range(m.ngeom) if m.geom_priority[g] == 1])
+        # body -> (side, finger index) for the per-finger contact force (the real Inspire hand reports one force
+        # per finger, thumb .. pinky)
+        self.body_finger = {}
+        for b in range(m.nbody):
+            for side in spec.SIDES:
+                name = m.body(b).name
+                if name.startswith(spec.PREFIX[side]):
+                    for i, f in enumerate(FINGERS):
+                        if f in name:
+                            self.body_finger[b] = (side, i)
         self.nominal = {
             "friction": m.geom_friction.copy(),
             "mass": m.body_mass.copy(),
@@ -157,6 +179,10 @@ class KitchenEnv:
         self.rng = np.random.default_rng(0)
         self.task = "tidy_table"
         self.tracks: dict[str, ObjectTrack] = {}
+        # what the controller is doing, set by it every step (phase like "left:transport", target object);
+        # only used to label failure causes
+        self.context: dict = {}
+        self.counter_body = m.geom_bodyid[m.geom("counter").id]
 
     # ------------------------------------------------------------------ reset
     def set_home(self, arm_targets: np.ndarray) -> None:
@@ -275,6 +301,8 @@ class KitchenEnv:
         self.traj_qpos: list[np.ndarray] = []
         self.traj_act: list[np.ndarray] = []
         self.events: list[dict] = []
+        self.context = {}
+        self._palm_prev = {s: self.data.site_xpos[self.palm_site[s]].copy() for s in spec.SIDES}
         self._log_qpos()
         return self.observe()
 
@@ -339,11 +367,26 @@ class KitchenEnv:
             "arm_q": d.qpos[self.arm_qadr].copy(),
             "hand_q": d.qpos[self.hand_qadr].copy(),
             "palm": {s: d.site_xpos[self.palm_site[s]].copy() for s in spec.SIDES},
+            "finger_force": self.finger_forces(),
             "objects": objects,
             "bin": np.array([*BIN_XY, TABLE_Z]),
         }
 
     # ------------------------------------------------------------------ bookkeeping
+    def finger_forces(self) -> dict[str, np.ndarray]:
+        """Normal contact force (N) on each finger (thumb .. pinky) of each hand, against anything."""
+        d, m = self.data, self.model
+        out = {s: np.zeros(len(FINGERS)) for s in spec.SIDES}
+        fr = np.zeros(6)
+        for i in range(d.ncon):
+            c = d.contact[i]
+            for b in (m.geom_bodyid[c.geom1], m.geom_bodyid[c.geom2]):
+                if b in self.body_finger:
+                    side, k = self.body_finger[b]
+                    mujoco.mj_contactForce(m, d, i, fr)
+                    out[side][k] += abs(fr[0])
+        return out
+
     def contacts_with_hands(self) -> dict[str, set[str]]:
         """object name -> set of hand sides touching it."""
         d, m = self.data, self.model
@@ -362,30 +405,112 @@ class KitchenEnv:
         com = self.data.xipos[self.obj_body[name]]
         return bool(np.all(np.abs(com[:2] - BIN_XY) < BIN_HALF_INNER) and com[2] < BIN_MAX_Z)
 
+    def object_touchers(self) -> dict[str, list[str]]:
+        """object name -> names of the bodies touching it (robot links, other objects, the bin; not the counter)."""
+        d, m = self.data, self.model
+        body_obj = {b: n for n, b in self.obj_body.items()}
+        out: dict[str, list[str]] = {}
+        for i in range(d.ncon):
+            c = d.contact[i]
+            b1, b2 = m.geom_bodyid[c.geom1], m.geom_bodyid[c.geom2]
+            for bo, bx in ((b1, b2), (b2, b1)):
+                if bo in body_obj and bx != self.counter_body and bx != bo:
+                    out.setdefault(body_obj[bo], []).append(body_obj.get(bx) or m.body(bx).name)
+        return out
+
+    # an object that has never been lifted counts as disturbed once it slid this far or tilted this much
+    DISTURB_SHIFT = 0.01
+    DISTURB_TILT = np.deg2rad(10)
+
+    @staticmethod
+    def _pick_culprit(names: list[str]) -> str:
+        """Prefer a robot link over another object over the bin."""
+        robot = [n for n in names if n not in OBJECTS and n != "bin"]
+        objs = [n for n in names if n in OBJECTS]
+        return (robot or objs or names)[0]
+
+    BLAME_WINDOW = 25   # steps (1 s): a robot link that touched the object this recently gets the blame
+
+    @staticmethod
+    def _is_robot(name: str | None) -> bool:
+        return bool(name) and name not in OBJECTS and name != "bin"
+
+    def _blame(self, tr: ObjectTrack, now: list[str] | None, phase: str) -> dict:
+        out = self._blame_body(tr, now, phase)
+        out["was_target"] = self.context.get("target") == tr.name
+        return out
+
+    def _blame_body(self, tr: ObjectTrack, now: list[str] | None, phase: str) -> dict:
+        """Who is touching the object now (a robot link first), else a robot link that touched it within the
+        last second, else whoever touched it last (and how long ago, in steps)."""
+        culprit = self._pick_culprit(now) if now else None
+        if self._is_robot(culprit):
+            return {"t": self.t, "by": culprit, "phase": phase, "ago": 0}
+        if tr.last_robot and self.t - tr.last_robot_t <= self.BLAME_WINDOW:
+            return {"t": self.t, "by": tr.last_robot, "phase": phase, "ago": self.t - tr.last_robot_t}
+        if culprit:
+            return {"t": self.t, "by": culprit, "phase": phase, "ago": 0}
+        return {"t": self.t, "by": tr.last_toucher or "none", "phase": phase,
+                "ago": self.t - tr.last_touch_t if tr.last_toucher else None}
+
     def _update_tracks(self) -> None:
         touching_all = self.contacts_with_hands()
+        touchers = self.object_touchers()
+        palm_speed = {}
+        for s in spec.SIDES:
+            p = self.data.site_xpos[self.palm_site[s]]
+            palm_speed[s] = float(np.linalg.norm(p - self._palm_prev[s]) / spec.CONTROL_DT)
+            self._palm_prev[s] = p.copy()
+        phase = self.context.get("phase", "")
+        target = self.context.get("target")
         for name, tr in self.tracks.items():
             pos, quat = self.object_pose(name)
             lift = pos[2] - TABLE_Z
             tr.max_lift = max(tr.max_lift, lift)
             touching = name in touching_all
             tr.touched |= touching
+            if name in touchers:
+                tr.last_toucher = self._pick_culprit(touchers[name])
+                tr.last_touch_t = self.t
+                if self._is_robot(tr.last_toucher):
+                    tr.last_robot, tr.last_robot_t = tr.last_toucher, self.t
             if touching and lift > 0.03 and not tr.grasped_once:
                 tr.grasped_once = True
                 self.events.append({"t": self.t, "event": "lifted", "object": name})
             if tr.in_hand and not touching:
                 tr.last_release_xy = pos[:2].copy()
-                self.events.append({"t": self.t, "event": "released", "object": name})
+                side = phase.split(":")[0]       # the hand that was executing the skill
+                tr.release = {"t": self.t, "phase": phase, "lift": round(float(lift), 4),
+                              "palm_speed": round(palm_speed.get(side, 0.0), 3)}
+                self.events.append({"t": self.t, "event": "released", "object": name, "phase": phase})
             tr.in_hand = touching
             # tipped = its rest pose changed by > 60 deg (an object may start lying on its side)
             R = self.data.xmat[self.obj_body[name]].reshape(3, 3)
             if tr.up0 is None:
                 tr.up0 = R.T @ np.array([0.0, 0.0, 1.0])          # world up, in the object frame, at the start
+                tr.pos0 = pos.copy()
+            if tr.disturbed is None and not tr.grasped_once:
+                shift = float(np.linalg.norm(pos[:2] - tr.pos0[:2]))
+                tilt = float(np.arccos(np.clip((R @ tr.up0)[2], -1.0, 1.0)))
+                if shift > self.DISTURB_SHIFT or tilt > self.DISTURB_TILT:
+                    by = self._pick_culprit(touchers[name]) if name in touchers else (tr.last_toucher or "none")
+                    tr.disturbed = {"t": self.t, "by": by, "phase": phase, "target": target,
+                                    "was_target": target == name, "shift": round(shift, 4),
+                                    "tilt_deg": round(float(np.rad2deg(tilt)), 1)}
+                    self.events.append({"event": "disturbed", "object": name, **tr.disturbed})
             same_rest = float((R @ tr.up0)[2]) > 0.5
-            fell_off = pos[2] < TABLE_Z - 0.05 and not self.in_bin(name)
+            inside = self.in_bin(name)
+            fell_off = pos[2] < TABLE_Z - 0.05 and not inside
+            if inside and not tr.in_hand:
+                tr.was_in_bin = True
+            elif tr.was_in_bin and not inside and tr.left_bin is None:
+                tr.left_bin = self._blame(tr, touchers.get(name), phase)
+                self.events.append({"event": "left_bin", "object": name, **tr.left_bin})
             if not tr.tipped and (fell_off or (not tr.grasped_once and not touching and not same_rest)):
                 tr.tipped = True
-                self.events.append({"t": self.t, "event": "knocked_over", "object": name})
+                tr.tipped_info = {**self._blame(tr, touchers.get(name), phase), "fell_off": bool(fell_off),
+                                  "after_bin": tr.was_in_bin}
+                self.events.append({"event": "knocked_over", "object": name, **tr.tipped_info})
 
     def _check_done(self) -> bool:
         if all(self.in_bin(n) and not tr.in_hand for n, tr in self.tracks.items()):
@@ -415,6 +540,9 @@ class KitchenEnv:
             "n_cleared": self.info.n_cleared,
             "n_objects": len(self.tracks),
             "safety": self.safety.stats.to_dict(),
+            "causes": {n: {"outcome": outs[n], "disturbed": t.disturbed, "release": t.release,
+                           "tipped": t.tipped_info, "left_bin": t.left_bin, "last_toucher": t.last_toucher}
+                       for n, t in self.tracks.items()},
         }
 
     def force_finish(self) -> None:

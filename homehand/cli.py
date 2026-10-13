@@ -139,11 +139,11 @@ def collect_vla(name: str = "vla_v1", n: int = typer.Option(120, "-n", "--n"), w
 
 
 @app.command()
-def train(policy: str = typer.Option("act", help="act | diffusion"), dataset: str = "expert_v1",
+def train(policy: str = typer.Option("act", help="act | diffusion | flow"), dataset: str = "expert_v1",
           steps: int = 20000, batch_size: int = 256, lr: float = 3e-4, name: str = "",
           init: str = typer.Option("", help="model directory to continue training from"),
           log_every: int = 500):
-    """Train ACT or Diffusion Policy on a recorded dataset."""
+    """Train ACT, Diffusion Policy or Flow Matching on a recorded dataset."""
     from homehand.policy.train import train as run
     run(policy, dataset, steps=steps, batch_size=batch_size, lr=lr, out_name=name or None, init=init or None,
         log_every=log_every)
@@ -166,6 +166,16 @@ def evaluate(controller: str = "expert", perception: str = "auto", randomization
     typer.echo(json.dumps({"run": run_id, "task_success": s["task_success"],
                            "object_clear_rate": s["object_clear_rate"], "episode_outcomes": s["episode_outcomes"],
                            "safety": s["safety"]}, indent=2))
+
+
+@app.command("rl-train")
+def rl_train(steps: int = 1_000_000, workers: int = 4, randomization: str = "medium", name: str = "residual_ppo",
+             neighbour_penalty: float = typer.Option(None, help="override the reward's neighbour penalty"),
+             seed: int = 0, task: str = typer.Option("pick", help="pick (residual on the pick) | grip (bimanual)"),
+             log_std_init: float = -1.0, n_steps: int = 512):
+    """Train a PPO policy on top of the expert (resumes from models/<name>)."""
+    from homehand.rl.train_ppo import train
+    typer.echo(train(steps, workers, randomization, name, neighbour_penalty, seed, task, log_std_init, n_steps))
 
 
 @perception_app.command("gen-data")

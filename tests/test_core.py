@@ -203,6 +203,37 @@ def test_clearance_detects_neighbour():
     assert box_distance(np.array([0.3, 0.13, 0.8 + 0.175 + 0.05]), box) == pytest.approx(0.05, abs=1e-6)
 
 
+def test_clearance_probes_follow_the_hand_command():
+    """The IK model keeps the fingers at 0: the probes must put them where the commanded hand shape is (the
+    open thumb sits ~4 cm from its zero position), and cover the forearm."""
+    from homehand.control import clearance as C
+    from homehand.control.grasps import GRASPS, LYING_GRASP
+    from homehand.control.ik import ArmIK
+    ik = ArmIK()
+    p0, _ = C.probes(ik, ik.q_home, "left")
+    p1, _ = C.probes(ik, C.with_hand(ik, ik.q_home, "left", GRASPS[LYING_GRASP["soup_can"]].open_cmd()), "left")
+    assert np.linalg.norm(p1 - p0, axis=1).max() > 0.03
+    elbow = ik.cfg.data.xpos[ik.model.body("left_elbow_link").id]
+    assert np.linalg.norm(p0 - elbow, axis=1).min() < 0.05
+
+
+def test_drop_spots_keep_objects_inside_the_bin():
+    """Every drop spot keeps the object's whole footprint inside the bin walls (a sugar box dropped with its
+    edge over the side wall tipped out of the bin)."""
+    from homehand.control.planner import TidyPlanner
+    from homehand.control.skills import Target
+    from homehand.env.kitchen_env import BIN_HALF_INNER, BIN_XY
+    from homehand.model.objects import OBJECTS
+    pl = object.__new__(TidyPlanner)
+    for name, o in OBJECTS.items():
+        r = max(o.half_x, o.half_y)
+        for side in ("left", "right"):
+            pl.in_bin_xy, pl.used_spots = [], []
+            for _ in range(4):
+                xy = pl.choose_drop_spot(side, Target(name, np.array([0.3, 0.2, 0.8]), 0.0, 0.1))
+                assert np.all(np.abs(xy - BIN_XY) + r <= BIN_HALF_INNER - 0.019), (name, side, xy)
+
+
 def test_wrist_cameras_look_along_the_fingers():
     import mujoco
     from homehand.model import spec
@@ -243,6 +274,103 @@ def test_expert_picks_soup_can():
     planner = TidyPlanner(env, perception="ground_truth")
     res = run_episode(env, planner, task="pick_place", seed=0, layout=[("soup_can", 0.31, -0.18, 0.0)])
     assert res["outcome"] == "success", res
+
+
+def test_zero_residual_is_the_expert():
+    """Expert + a residual policy that outputs zeros commands exactly what the expert commands."""
+    from homehand.control.planner import TidyPlanner
+    from homehand.env.kitchen_env import KitchenEnv
+    from homehand.rl.residual import ACT_DIM, OBS_DIM
+    from homehand.runner import run_episode
+
+    class Zero:
+        kind = "residual"
+        seen = []
+
+        def act(self, x):
+            assert x.shape == (OBS_DIM,) and np.all(np.isfinite(x))
+            self.seen.append(1)
+            return np.zeros(ACT_DIM)
+
+    layout = [("soup_can", 0.31, -0.18, 0.0)]
+    acts = {}
+    for name, policy in (("expert", None), ("residual", Zero())):
+        env = KitchenEnv()
+        planner = TidyPlanner(env, perception="ground_truth", policy=policy)
+        acts[name] = []
+        run_episode(env, planner, task="pick_place", seed=0, layout=layout,
+                    on_step=lambda obs, a, out=acts[name]: out.append(np.array(a)))
+    assert Zero.seen, "the residual was never asked"
+    assert len(acts["expert"]) == len(acts["residual"])
+    assert np.array_equal(np.array(acts["expert"]), np.array(acts["residual"]))
+
+
+def test_flow_matching_policy_learns_a_mapping():
+    """Shapes, and a tiny overfit: two observations -> two constant action chunks; Euler sampling recovers them."""
+    import torch
+    from homehand.policy.models import MODELS
+    torch.manual_seed(0)
+    m = MODELS["flow"](obs_dim=4, act_dim=3, chunk=8, n_infer_steps=10, cond_dim=64, dims=(32, 64))
+    obs = torch.tensor([[1.0, 0, 0, 0], [0, 1.0, 0, 0]]).repeat(32, 1)
+    target = torch.stack([torch.full((8, 3), 1.0), torch.full((8, 3), -1.0)]).repeat(32, 1, 1)
+    mask = torch.ones(64, 8)
+    opt = torch.optim.Adam(m.parameters(), lr=2e-3)
+    for _ in range(300):
+        loss, _ = m.loss(obs, target, mask)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    m.eval()
+    out = m.predict(obs[:2], generator=torch.Generator().manual_seed(1))
+    assert out.shape == (2, 8, 3)
+    assert torch.allclose(out.mean((1, 2)), torch.tensor([1.0, -1.0]), atol=0.2), out.mean((1, 2))
+
+
+def test_bimanual_expert_lifts_the_box():
+    """Both palms squeeze the wide box, lift it, carry it to the goal and put it down (nominal physics)."""
+    from homehand import paths
+    if not paths.BIMANUAL_XML.exists():
+        from homehand.model.build import build_bimanual_scene
+        build_bimanual_scene()
+    from homehand.control.bimanual import BimanualExpert
+    from homehand.env.bimanual_env import BimanualEnv
+    from homehand.runner import run_episode
+    env = BimanualEnv()
+    r = run_episode(env, BimanualExpert(env), task="bimanual_lift", seed=0)
+    assert r["outcome"] == "success", env.info.details
+    assert not env.safety.stats.protective_stop
+
+
+def test_grip_env_reward_terms():
+    pytest.importorskip("gymnasium")
+    from homehand import paths
+    if not paths.BIMANUAL_XML.exists():
+        from homehand.model.build import build_bimanual_scene
+        build_bimanual_scene()
+    from homehand.rl.grip import ACT_DIM, OBS_DIM
+    from homehand.rl.grip_env import GripEnv
+    env = GripEnv(randomization="nominal", seed=0)
+    obs, _ = env.reset()
+    assert obs.shape == (OBS_DIM,) and np.all(np.isfinite(obs))
+    for _ in range(4):
+        obs, r, done, _, info = env.step(np.zeros(ACT_DIM))
+        assert np.isfinite(r) and abs(r - sum(info["terms"].values())) < 1e-9
+        if done:
+            break
+
+
+def test_residual_env_reward_terms():
+    pytest.importorskip("gymnasium")
+    from homehand.rl.residual import ACT_DIM, OBS_DIM
+    from homehand.rl.residual_env import ResidualPickEnv
+    env = ResidualPickEnv(randomization="nominal", seed=3)
+    obs, _ = env.reset()
+    assert obs.shape == (OBS_DIM,) and np.all(np.isfinite(obs))
+    for _ in range(5):
+        obs, r, done, trunc, info = env.step(np.zeros(ACT_DIM))
+        assert np.isfinite(r) and abs(r - sum(info["terms"].values())) < 1e-9
+        if done or trunc:
+            break
 
 
 def _can_render() -> bool:

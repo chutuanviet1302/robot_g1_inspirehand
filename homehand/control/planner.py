@@ -7,13 +7,14 @@ happened (dropped objects, missed grasps, objects pushed by the other hand).
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from homehand.control.grasps import GRASPS, LYING_GRASP, RELAXED_HAND
-from homehand.control.clearance import min_clearance, obstacle_boxes
+from homehand.control.clearance import PERCEPTION_INFLATE, clearances, obstacle_boxes
 from homehand.control.ik import ArmIK
 from homehand.control import skills as skills_mod
 from homehand.control.skills import PickPlaceSkill, Target, compose_action, grasp_plan
@@ -23,6 +24,12 @@ from homehand.model.objects import OBJECTS, lying_dims
 
 PERCEPTION_MODES = ("ground_truth", "oracle", "yolo", "auto")
 BIN_CLEARANCE = 0.008    # m: finger half-thickness around the fingertip sites
+APPROACH_MARGIN = 0.005  # m: a grasp keeping this much from every neighbour is "clear"
+# A lying object brushed by the hand slides a little and is simply perceived again; an upright one tips over.
+# So when no grasp is clear, the one that would only push a lying object goes first.
+LYING_TOLERANCE = 0.02   # m of overlap with a lying neighbour that counts as harmless
+RISK_ORDER = os.environ.get("HOMEHAND_RISK_ORDER", "1") == "1"
+DROP_INSIDE = os.environ.get("HOMEHAND_DROP_INSIDE", "1") == "1"   # 0: drop spots as until 2026-10-12
 
 
 @dataclass
@@ -127,23 +134,41 @@ class TidyPlanner:
                     self.demos.append(self._demo)
                     self._demo = None
                 self.log.append({"t": obs["t"], "event": "skill_done", "side": self.current["side"],
-                                 "object": self.current["target"]["name"], "status": self.skill.status})
+                                 "object": self.current["target"]["name"], "status": self.skill.status,
+                                 "clearance": getattr(self.skill, "clearance", {})})
                 self.q = self.skill.q
                 self.hand_cmd = self.skill.hand_cmd
                 self.skill = None
                 self.state = "perceive"
+            self._annotate()
             return a
+        self._annotate()
         return compose_action(self.ik, self.q, self.hand_cmd)
+
+    def _annotate(self) -> None:
+        """Tell the env what is being done (only used to attribute failures)."""
+        self.env.context = {"phase": self.phase,
+                            "target": self.current["target"]["name"] if self.state == "execute" else None}
 
     def _make_skill(self, side: str, target: Target, obs: dict):
         if self.skill_kind == "smolvla":  # vision-language-action policy (LeRobot environment)
             from homehand.policy.smolvla_skill import SmolVLASkill
             return SmolVLASkill(self.policy, self.env, self.ik, side, target, self.q, self.hand_cmd)
+        if self.skill_kind == "residual":  # expert + learned residual in the contact phases (homehand.rl)
+            from homehand.rl.residual import ResidualSkill
+            others = [t for t in self.last_perception.targets if t.name != target.name]
+            return ResidualSkill(self.policy, self.ik, side, target, self.q, self.hand_cmd, obstacles=others,
+                                 inflate=self.inflate)
         if self.skill_kind != "expert":  # learned policy (ACT / Diffusion Policy)
             from homehand.policy.skill import PolicySkill
             return PolicySkill(self.policy, self.ik, side, target, self.q, self.hand_cmd)
         others = [t for t in self.last_perception.targets if t.name != target.name] if self.last_perception else []
-        return PickPlaceSkill(self.ik, side, target, self.q, self.hand_cmd, obstacles=others)
+        return PickPlaceSkill(self.ik, side, target, self.q, self.hand_cmd, obstacles=others,
+                              inflate=self.inflate)
+
+    @property
+    def inflate(self) -> float:
+        return PERCEPTION_INFLATE.get(self.perception_mode, 0.006)
 
     # ------------------------------------------------------------------ perception
     def perceive(self, obs: dict) -> PerceptionResult:
@@ -183,17 +208,31 @@ class TidyPlanner:
     # three positions across, on the hand's side. Successive drops take the spot furthest from what is
     # already in the bin.
     DROP_ACROSS = (0.03, 0.08, 0.12)   # |y| offsets from the bin centre line
+    SIDE_MARGIN = 0.02                  # m between an object's footprint and the bin's side wall
+
+    def drop_spots(self, side: str, name: str) -> list[np.ndarray]:
+        o = OBJECTS[name]
+        sgn = -1.0 if side == "right" else 1.0
+        r = max(o.half_x, o.half_y)
+        dx = -BIN_HALF_INNER[0] + r + 0.035     # bottom edge 3.5 cm inside the near wall
+        # (12 mm: 4 of 96 objects bounced back over the wall)
+        # ... and the whole footprint SIDE_MARGIN inside the side wall: a sugar box dropped at |y| = 0.12 had its
+        # edge right over the side wall, tipped onto it and fell out of the bin
+        dy_max = BIN_HALF_INNER[1] - r - self.SIDE_MARGIN if DROP_INSIDE else np.inf
+        spots = []
+        for dy in self.DROP_ACROSS:
+            xy = BIN_XY + np.array([dx, sgn * min(dy, dy_max)])
+            if not any(np.allclose(xy, s) for s in spots):
+                spots.append(xy)
+        return spots
 
     def choose_drop_spot(self, side: str, t: Target):
-        o = OBJECTS[t.name]
-        sgn = -1.0 if side == "right" else 1.0
-        dx = -BIN_HALF_INNER[0] + max(o.half_x, o.half_y) + 0.035     # bottom edge 3.5 cm inside the near wall
-        # (12 mm: 4 of 96 objects bounced back over the wall)
-        spots = [BIN_XY + np.array([dx, sgn * dy]) for dy in self.DROP_ACROSS]
+        spots = self.drop_spots(side, t.name)
         occupied = list(self.in_bin_xy) + list(self.used_spots)
 
-        def clearance(xy):
-            return min((float(np.linalg.norm(xy - q)) for q in occupied), default=1.0)
+        def clearance(xy, occ=occupied):
+            return min((float(np.linalg.norm(xy - q)) for q in occ), default=1.0)
+
         k = max(range(len(spots)), key=lambda i: (round(clearance(spots[i]), 2), -i))   # ties: list order
         xy = spots[k]
         t.drop_xy = xy
@@ -230,15 +269,25 @@ class TidyPlanner:
                 return False
         return True
 
-    def approach_clear(self, side: str, t: Target, targets: list[Target], margin: float = 0.005) -> bool:
-        """The hand at its pre-grasp and grasp poses keeps `margin` from every other object (IK + probes)."""
-        boxes = obstacle_boxes([o for o in targets if o.name != t.name])
-        if not boxes:
-            return True
+    def approach_risk(self, side: str, t: Target, targets: list[Target]) -> float:
+        """Clearance (m) of the hand to every other object at its pre-grasp pose (hand open), grasp pose (open
+        and closed), on the real kinematics; a lying neighbour may be brushed by up to LYING_TOLERANCE."""
+        others = [o for o in targets if o.name != t.name]
+        if not others:
+            return np.inf
+        boxes = obstacle_boxes(others, self.inflate)
         p = grasp_plan(side, t)
+        gt = p["grasp_type"]
         pre = p.get("pre", p["grasp"] + np.array([*p["back"], 0.0]))
         qs = [self.ik.solve(self.ik.q_home, {side: (pose, p["quat"])}, iters=200)[0] for pose in (pre, p["grasp"])]
-        return min_clearance(self.ik, qs, side, boxes, stride=1) >= margin
+        c = clearances(self.ik, [qs[0], qs[1], qs[1]], side, boxes, stride=1,
+                       hands=np.array([gt.open_cmd(), gt.open_cmd(), gt.closed_cmd()]))
+        if RISK_ORDER:
+            c = c + np.array([LYING_TOLERANCE if o.rest == "lying" else 0.0 for o in others])
+        return float(c.min())
+
+    def approach_clear(self, side: str, t: Target, targets: list[Target], margin: float = APPROACH_MARGIN) -> bool:
+        return self.approach_risk(side, t, targets) >= margin
 
     # ------------------------------------------------------------------ decision
     def assign_hand(self, t: Target) -> str:
@@ -263,8 +312,14 @@ class TidyPlanner:
                 # outermost first: the back of the hand faces outwards, so taking the inner object first
                 # would wedge the hand between two objects; but an object whose grasp would brush a neighbour
                 # waits until that neighbour is gone (the easy ones first, as a person would)
-                if skills_mod.EXPERT_STYLE != "v1":
-                    t = max(by_side[side], key=lambda t: (self.approach_clear(side, t, cands), abs(float(t.pos[1]))))
+                if skills_mod.EXPERT_STYLE != "v1" and RISK_ORDER:
+                    # clear grasps outermost first; if none is clear, the least risky one
+                    def key(t):
+                        r = self.approach_risk(side, t, targets)
+                        return (r >= APPROACH_MARGIN, abs(float(t.pos[1])) if r >= APPROACH_MARGIN else r)
+                    t = max(by_side[side], key=key)
+                elif skills_mod.EXPERT_STYLE != "v1":
+                    t = max(by_side[side], key=lambda t: (self.approach_clear(side, t, targets), abs(float(t.pos[1]))))
                 else:
                     t = max(by_side[side], key=lambda t: abs(float(t.pos[1])))
                 return side, t

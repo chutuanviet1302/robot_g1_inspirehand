@@ -91,7 +91,7 @@ def available_controllers() -> list[dict]:
             if (d / "policy.pt").exists() and not d.name.startswith("smoke"):
                 log = json.loads((d / "train_log.json").read_text()) if (d / "train_log.json").exists() else {}
                 kind = log.get("policy", "policy")
-                label = {"act": "ACT", "diffusion": "Diffusion Policy"}.get(kind, kind)
+                label = {"act": "ACT", "diffusion": "Diffusion Policy", "flow": "Flow Matching"}.get(kind, kind)
                 out.append({"id": d.name, "label": f"{label} ({d.name})", "kind": kind})
     return out
 
