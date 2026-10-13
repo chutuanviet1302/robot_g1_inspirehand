@@ -72,8 +72,11 @@ def demo(seed: int = 0, perception: str = "auto", controller: str = "expert", ou
 @app.command()
 def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", speed: float = 1.0,
          loop: bool = typer.Option(False, help="keep running the next seed after each episode"),
-         task: str = typer.Option("tidy_table", help="tidy_table | bimanual_lift"),
-         randomization: str = "nominal"):
+         task: str = typer.Option("tidy_table", help="tidy_table | bimanual_lift | conveyor"),
+         randomization: str = "nominal",
+         belt_speed: float = typer.Option(0.03, help="conveyor: belt speed in m/s (0 = stopped)"),
+         objects: int = typer.Option(4, help="conveyor: objects per episode (1-4)"),
+         gap: str = typer.Option("0.25,0.35", help="conveyor: min,max metres between objects on the belt")):
     """Open the native MuJoCo viewer and watch the robot tidy the counter (orbit with the mouse)."""
     import time
 
@@ -83,7 +86,14 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
     from homehand.env.kitchen_env import KitchenEnv
     from homehand.model import spec
 
-    if task == "bimanual_lift":
+    reset_kw = {}
+    if task == "conveyor":
+        from homehand.control.conveyor_planner import ConveyorPlanner
+        from homehand.env.conveyor_env import ConveyorEnv
+        env = ConveyorEnv()
+        planner = ConveyorPlanner(env, perception="ground_truth" if perception == "ground_truth" else perception)
+        reset_kw = {"speed": belt_speed, "n_objects": objects, "gap": tuple(float(g) for g in gap.split(","))}
+    elif task == "bimanual_lift":
         from homehand.control.bimanual import BimanualExpert
         from homehand.env.bimanual_env import BimanualEnv
         env = BimanualEnv()
@@ -100,7 +110,7 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
         v.cam.distance, v.cam.azimuth, v.cam.elevation = 1.5, 150, -22
         while v.is_running():
             with v.lock():
-                obs = env.reset(task, seed=seed, randomization=randomization)
+                obs = env.reset(task, seed=seed, randomization=randomization, **reset_kw)
                 planner.reset(obs)
             typer.echo(f"seed {seed}: objects {[str(o) for o in env.info.objects]}")
             done, settle, t_wall = False, 0, time.perf_counter()
