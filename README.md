@@ -366,8 +366,11 @@ lifts that slipped before reaching 8 cm.
 Learning curves: [media/rl_residual_pick.png](media/rl_residual_pick.png),
 [media/rl_bimanual_grip.png](media/rl_bimanual_grip.png) (both flat).
 
-**Flow matching** (same 870 demonstrations as ACT / Diffusion, 30 k steps): validation action MSE 0.0117
-(ACT 0.0106, Diffusion 0.041); the closed-loop evaluation on the tidy-table task is still to be run.
+**Flow matching** (same 870 demonstrations as ACT / Diffusion, 30 k steps, 10 Euler steps per chunk; YOLO,
+nominal, 50 episodes): **56 % [42–69] clean, 83 % [77–88] of the objects, 2 protective stops** — between ACT
+(64 % / 86 %, 0 stops) and Diffusion Policy (30 % / 70 %, 5 stops) with a third of Diffusion's sampling steps;
+validation action MSE 0.0117 (ACT 0.0106, Diffusion 0.041). Caveat: ACT and Diffusion were evaluated before the
+planner changes above (grasp order), flow matching after them.
 
 ## Licences
 

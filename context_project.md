@@ -198,7 +198,8 @@ Mục tiêu phiên: đáp ứng JD "AI Manipulation Engineer" (RL, diffusion/flo
   động chống lật (chênh độ cao lòng bàn tay / pitch cổ tay), thử bằng hành động cố định trước khi train.
   Observation có **lực từng ngón** (thêm `obs["finger_force"]`).
 - **Flow matching** (`policy/models.py: FlowMatchingPolicy`, `homehand train --policy flow`): 30k bước, val MSE
-  0.0117 (ACT 0.0106, Diffusion 0.041). **Chưa đánh giá trên task** (đánh giá YOLO 50 ep bị dừng ở 25/50).
+  0.0117 (ACT 0.0106, Diffusion 0.041). YOLO nominal 50 ep (run 18 trong DB): **56 % sạch [42–69], 83 % vật
+  [77–88], 2 dừng an toàn** — giữa ACT (64/86) và Diffusion (30/70); lưu ý ACT/Diffusion đo với planner cũ.
 - **Bimanual** (`env/bimanual_env.py`, `control/bimanual.py`, cảnh riêng `generated/scene_bimanual.xml`): hộp
   14×20×12 cm 0.6 kg, hai lòng bàn tay ép, ngón cong 1.47 rad, hộp ở x = 0.32 (x ≥ 0.35 tay sát giới hạn với tới).
   **86 % nominal, 80 % medium** (50 ep mỗi mức, `scripts/bimanual_eval.py`).
@@ -240,7 +241,6 @@ Số cũ (máy Linux, phiên 1–4) không còn dùng; `data/archive/` trên má
 ## 7. Việc còn lại
 
 (Cập nhật phiên 7 — các mục cũ bên dưới vẫn đúng trừ khi ghi khác.)
-- Đánh giá Flow matching trên task (YOLO 50 ep, so ACT/Diffusion).
 - Build + chạy thử Docker ROS 2 (`docker compose build ros && docker compose run --rm ros`).
 - RL có kết quả dương: hành động chống lật khi đặt hộp; hoặc residual dưới nhiễu mạnh hơn (ma sát ×0.5).
 - SmolVLA ≥ 20k bước trên Kaggle (bạn chạy).
