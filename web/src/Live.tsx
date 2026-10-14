@@ -39,7 +39,9 @@ export function Viewer({ snap, connected }: { snap: Snapshot | null; connected: 
   return (
     <div className="viewer">
       <div className="video">
-        {snap?.frame ? <img src={`data:image/jpeg;base64,${snap.frame}`} /> : <div className="placeholder">{connected ? "Press ▶ Run to start an episode" : "connecting…"}</div>}
+        {snap?.mode === "simulating" ? (
+          <div className="placeholder">Simulating the conveyor episode… {Math.round((tel.progress ?? 0) * 100)}%<br />(played back smoothly when done)</div>
+        ) : snap?.frame ? <img src={`data:image/jpeg;base64,${snap.frame}`} /> : <div className="placeholder">{connected ? "Press ▶ Run to start an episode" : "connecting…"}</div>}
         <div className="overlay">
           <span className={`badge mode-${snap?.mode}`}>{snap?.mode ?? "…"}</span>
           {tel.t !== undefined && <span className="badge">t = {tel.t}s</span>}
@@ -63,7 +65,8 @@ export function Viewer({ snap, connected }: { snap: Snapshot | null; connected: 
 
 export function Live({ config }: { config: Config | null }) {
   const { snap, connected } = useLive();
-  const [form, setForm] = useState({ controller: "expert", perception: "auto", randomization: "nominal", seed: 0, n_objects: 0, camera: "front", speed: 1 });
+  const [form, setForm] = useState({ task: "tidy_table", belt_speed: 0.03, controller: "expert", perception: "auto", randomization: "nominal", seed: 0, n_objects: 0, camera: "front", speed: 1 });
+  const conveyor = form.task === "conveyor";
   const logRef = useRef<HTMLDivElement>(null);
   const set = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
   useEffect(() => { logRef.current?.scrollTo(0, 1e9); }, [snap?.log?.length]);
@@ -76,11 +79,23 @@ export function Live({ config }: { config: Config | null }) {
     <div className="page live">
       <div className="controls card">
         <h3>Episode</h3>
+        <label>Task
+          <select value={form.task} onChange={(e) => setForm((f) => ({ ...f, task: e.target.value, controller: "expert", n_objects: e.target.value === "conveyor" ? 4 : 0 }))}>
+            {(config?.tasks ?? [{ id: "tidy_table", label: "Tidy the counter" }]).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </label>
         <label>Controller
-          <select value={form.controller} onChange={(e) => set("controller", e.target.value)}>
+          <select value={form.controller} disabled={conveyor} onChange={(e) => set("controller", e.target.value)}>
             {config?.controllers.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
         </label>
+        {conveyor && (
+          <label>Belt speed
+            <select value={form.belt_speed} onChange={(e) => set("belt_speed", +e.target.value)}>
+              {[0.01, 0.02, 0.03, 0.04, 0.05].map((v) => <option key={v} value={v}>{Math.round(v * 100)} cm/s</option>)}
+            </select>
+          </label>
+        )}
         <label>Perception
           <select value={form.perception} onChange={(e) => set("perception", e.target.value)}>
             {config?.perception.map((p) => <option key={p.id} value={p.id} disabled={p.available === false}>{p.label}{p.available === false ? " (not trained)" : ""}</option>)}
@@ -94,7 +109,7 @@ export function Live({ config }: { config: Config | null }) {
         <div className="row">
           <label>Seed<input type="number" value={form.seed} onChange={(e) => set("seed", +e.target.value)} /></label>
           <label>Objects<select value={form.n_objects} onChange={(e) => set("n_objects", +e.target.value)}>
-            <option value={0}>random 3-4</option>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+            {!conveyor && <option value={0}>random 3-4</option>}{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
           </select></label>
         </div>
         <label>Speed ×{form.speed}
@@ -119,7 +134,7 @@ export function Live({ config }: { config: Config | null }) {
         <Viewer snap={snap} connected={connected} />
         <div className="grid3">
           <div className="card">
-            <div className="panel-title">Objects on the counter</div>
+            <div className="panel-title">{conveyor ? "Objects on the belt" : "Objects on the counter"}</div>
             <table className="mini">
               <tbody>
                 {Object.entries(tel.objects ?? {}).map(([name, o]: any) => (
@@ -173,7 +188,12 @@ export function Live({ config }: { config: Config | null }) {
 
 function describe(e: any): string {
   switch (e.event) {
-    case "pick": return `PICK ${e.target.name} with ${e.side} hand (${e.grasp}), attempt ${e.attempt}, est. (${e.target.pos[0]}, ${e.target.pos[1]})`;
+    case "pick": return e.target
+      ? `PICK ${e.target.name} with ${e.side} hand (${e.grasp}), attempt ${e.attempt}, est. (${e.target.pos[0]}, ${e.target.pos[1]})`
+      : `PICK ${e.object} (${e.rest}) with ${e.side} hand, intercept at t = ${e.t_sync}s${e.grasp ? ", second grasp" : ""}`;
+    case "spawned": return `${e.object} comes onto the belt (${e.rest})`;
+    case "missed": return `${e.object} rode past the robot`;
+    case "disturbed": return `${e.object} disturbed by ${e.by}`;
     case "skill_done": return `${e.side} hand finished ${e.object}: ${e.status}`;
     case "table_clear": return "head camera sees no more objects on the counter";
     case "gave_up": return `gave up on: ${e.remaining.join(", ")}`;

@@ -30,6 +30,8 @@ mimetypes.add_type("image/svg+xml", ".svg")
 
 
 class RunConfig(BaseModel):
+    task: str = "tidy_table"    # tidy_table | conveyor
+    belt_speed: float = 0.03    # conveyor: m/s
     controller: str = "expert"
     perception: str = "auto"
     randomization: str = "nominal"
@@ -114,6 +116,8 @@ def create_app() -> FastAPI:
                       {"id": "oracle", "label": "Oracle masks + depth"},
                       {"id": "ground_truth", "label": "Ground-truth poses"}]
         return {
+            "tasks": [{"id": "tidy_table", "label": "Tidy the counter"},
+                      {"id": "conveyor", "label": "Conveyor belt (both hands, 6-D pose)"}],
             "controllers": available_controllers(),
             "perception": perception,
             "randomization": {k: v.to_dict() for k, v in PRESETS.items()},

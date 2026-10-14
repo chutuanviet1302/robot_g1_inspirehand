@@ -51,6 +51,7 @@ export type Episode = {
 };
 
 export type Config = {
+  tasks?: { id: string; label: string }[];
   controllers: { id: string; label: string; kind: string }[];
   perception: { id: string; label: string; available?: boolean }[];
   randomization: Record<string, Record<string, unknown>>;

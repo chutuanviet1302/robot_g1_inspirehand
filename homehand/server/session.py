@@ -1,8 +1,10 @@
 """Live simulation session for the web app.
 
 One worker thread owns the MuJoCo model, data and OpenGL renderer (OpenGL contexts are bound to the thread
-that created them) and executes commands from a queue: run a tidy_table episode in (scaled) real time, replay
-a recorded episode, or idle. The latest JPEG frames + telemetry are published for the WebSocket.
+that created them) and executes commands from a queue: run a tidy_table episode in (scaled) real time, run a
+conveyor episode (simulated first, then played back: its planner thinks for up to a few seconds at a time, which
+would freeze a live stream), replay a recorded episode, or idle. The latest JPEG frames + telemetry are published
+for the WebSocket.
 """
 
 from __future__ import annotations
@@ -22,7 +24,8 @@ from homehand import paths
 from homehand.model import spec
 from homehand.model.objects import TIDY_OBJECTS as OBJECTS
 
-COLORS = {"soup_can": (230, 60, 50), "mustard": (240, 200, 30), "sugar_box": (80, 160, 255), "meat_can": (90, 220, 120)}
+COLORS = {"soup_can": (230, 60, 50), "mustard": (240, 200, 30), "sugar_box": (80, 160, 255), "meat_can": (90, 220, 120),
+          "foam_brick": (200, 80, 200), "apple": (255, 140, 40)}
 
 
 @dataclass
@@ -78,22 +81,37 @@ class LiveSession:
                     "error": s.error}
 
     # ------------------------------------------------------------------ worker thread
+    def _use(self, task: str) -> None:
+        """Make the scene of `task` the current one (each scene is built once, in this thread)."""
+        if task not in self.envs:
+            self._set(mode="loading")
+            if task == "conveyor":
+                from homehand.env.conveyor_env import ConveyorEnv
+                self.envs[task] = ConveyorEnv(record=True)
+            else:
+                from homehand.env.kitchen_env import KitchenEnv
+                self.envs[task] = KitchenEnv(record=True)
+        if self.ik is None:
+            from homehand.control.ik import ArmIK
+            self.ik = ArmIK()
+        self.env = self.envs[task]
+
     def _loop(self) -> None:
         self.env = None
+        self.envs: dict = {}
         self.ik = None
         while True:
             cmd, arg = self.cmds.get()
             self.stop_flag.clear()
             try:
-                if self.env is None:
-                    self._set(mode="loading")
-                    from homehand.control.ik import ArmIK
-                    from homehand.env.kitchen_env import KitchenEnv
-                    self.env = KitchenEnv(record=True)
-                    self.ik = ArmIK()
-                if cmd == "run":
+                if cmd == "run" and arg.get("task") == "conveyor":
+                    self._use("conveyor")
+                    self._run_conveyor(arg)
+                elif cmd == "run":
+                    self._use("tidy_table")
                     self._run(arg)
                 elif cmd == "replay":
+                    self._use("tidy_table")
                     self._replay(arg)
             except Exception as e:  # surface errors in the UI instead of killing the thread
                 import traceback
@@ -186,6 +204,95 @@ class LiveSession:
         self._set(mode="idle", frame=self._render(), head=self._head_view(planner), telemetry=tel,
                   result={k: res[k] for k in ("outcome", "success", "n_cleared", "n_objects", "object_outcomes",
                                                "steps", "sim_time", "safety", "perception_ms")})
+
+    def _run_conveyor(self, cfg: dict) -> None:
+        """Conveyor episode: simulate it (progress shown), then play it back at `speed` x real time with the
+        telemetry, grip forces and log recorded along the way."""
+        from homehand.control.conveyor_planner import ConveyorPlanner
+        from homehand.runner import run_episode
+
+        env = self.env
+        perception = cfg.get("perception", "auto")
+        if perception == "auto":
+            perception = "yolo" if env.YOLO_WEIGHTS.exists() else "oracle"
+        planner = ConveyorPlanner(env, perception=perception, ik=self.ik)
+        self.camera = cfg.get("camera", self.camera)
+        n_obj = int(cfg.get("n_objects", 0)) or 4
+        belt = float(cfg.get("belt_speed", 0.03))
+        reset = env.reset
+        env.reset = lambda task="conveyor", seed=0, objects=None, randomization=None, layout=None: reset(
+            task, seed=seed, randomization=randomization, speed=belt, n_objects=n_obj)
+        conf = {**cfg, "perception": perception, "skill": planner.skill_kind, "n_objects": n_obj}
+        self._set(mode="simulating", config=conf, history=[], log=[], result=None, error=None, head=None,
+                  telemetry={"progress": 0.0})
+        rec: list = []          # per control step: (qpos, telemetry or None)
+
+        def current():
+            sk = planner.skill
+            if sk is None:
+                return None
+            side = next(s for s, k in planner.skills.items() if k is sk)
+            return {"side": side, "target": {"name": sk.name}, "grasp": sk.grasp_type.label, "attempt": 1}
+
+        def on_step(obs, action):
+            if self.stop_flag.is_set():
+                return True
+            tel = None
+            if env.t % 2 == 0:
+                tel = env.telemetry()
+                tel["phase"] = planner.phase
+                tel["current"] = current()
+            rec.append((env.data.qpos.copy(), tel))
+            if env.t % 25 == 0:
+                self._set(telemetry={"progress": round(min(1.0, env.t / max(env.horizon, 1)), 3),
+                                     "t": round(env.t * spec.CONTROL_DT, 2)})
+            return False
+
+        try:
+            res = run_episode(env, planner, task="conveyor", seed=int(cfg.get("seed", 0)),
+                              randomization=cfg.get("randomization"), on_step=on_step)
+        finally:
+            env.reset = reset
+        if self.stop_flag.is_set():
+            self._set(mode="idle")
+            return
+        log = planner.log + list(env.events)
+        result = {k: res[k] for k in ("outcome", "success", "n_cleared", "n_objects", "object_outcomes", "steps",
+                                      "sim_time", "safety", "perception_ms") if k in res}
+        # play back
+        self._set(mode="running")
+        speed = float(cfg.get("speed", 1.0))
+        t_wall = time.perf_counter()
+        last_frame, last_head = 0.0, -1.0
+        tel = {}
+        for k, (q, t) in enumerate(rec):
+            if self.stop_flag.is_set():
+                break
+            env.data.qpos[:] = q
+            mujoco.mj_forward(env.model, env.data)
+            if t is not None:
+                tel = t
+                with self.lock:
+                    self.state.history.append({"t": t["t"], "grip_left": t["grip_force"]["left"],
+                                               "grip_right": t["grip_force"]["right"], "cleared": t["n_cleared"]})
+                    self.state.log = [e for e in log if e.get("t", 0) <= k + 1]
+            now = time.perf_counter()
+            if now - last_frame > 1 / 20:
+                upd = {"frame": self._render(), "telemetry": tel}
+                if now - last_head > 0.2:
+                    upd["head"] = _jpeg(env.render("head", 480, 360), 70)
+                    last_head = now
+                self._set(**upd)
+                last_frame = now
+            t_wall += spec.CONTROL_DT / max(speed, 0.05)
+            delay = t_wall - time.perf_counter()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                t_wall = time.perf_counter()
+        with self.lock:
+            self.state.log = log
+        self._set(mode="idle", frame=self._render(), telemetry=env.telemetry(), result=result)
 
     def _replay(self, ep: dict) -> None:
         path = paths.DATA_DIR / ep["replay"]
