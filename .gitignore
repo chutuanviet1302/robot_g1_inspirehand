@@ -14,6 +14,7 @@ yolov8n-seg.pt
 docker/wheels/
 docker/dl.log
 !media/*.mp4
+!media/*.gif
 MUJOCO_LOG.TXT
 .pytest_cache/
 runs/

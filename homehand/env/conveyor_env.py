@@ -60,6 +60,8 @@ class ConveyorEnv(KitchenEnv):
         """speed: belt speed (m/s, 0 = stopped); n_objects: how many (each class at most once); gap: (min, max) m
         between consecutive objects along the belt."""
         super().reset("pick_place", seed=seed, randomization=randomization, layout=[])   # all objects parked
+        for n in self.OBJECT_NAMES:          # out of the cameras' view (behind them) until they come onto the belt
+            self._park(n)
         self.task = task
         self.speed = float(speed)
         self.data.ctrl[self.belt_act] = self.speed
@@ -128,7 +130,7 @@ class ConveyorEnv(KitchenEnv):
     def _park(self, name: str) -> None:
         a, v = self.obj_qadr[name], self.obj_dof[name]
         k = self.OBJECT_NAMES.index(name)
-        self.data.qpos[a:a + 3] = [-1.2, 0.2 * k, 0.001]
+        self.data.qpos[a:a + 3] = [4.0, 0.3 * k, 0.001]
         self.data.qpos[a + 3:a + 7] = [1, 0, 0, 0]
         self.data.qvel[v:v + 6] = 0.0
         mujoco.mj_forward(self.model, self.data)

@@ -14,6 +14,12 @@ one command as a web app. A second, **bimanual** task (both palms lift a box too
 on **Windows 11** (native, Python 3.12: tests, viewer, web app and the whole training / evaluation pipeline),
 or in Docker.
 
+![Conveyor picking: both hands take objects off the running belt into the bin at their own side](media/conveyor_seed7.gif)
+
+*Conveyor task, seed 7 at 3× speed: the belt runs at 3 cm/s, each object is located by 6-D pose estimation (ICP on
+the head camera's depth), the hands take turns and drop into the bin on their own side — 4/4 in the bins
+(`python scripts/make_gif.py`).*
+
 Demo video: [media/demo_seed8.mp4](media/demo_seed8.mp4) — one full episode in real time, YOLO perception, two of the four objects lying on their side (taken from above), each drop on a different spot.
 
 ```
