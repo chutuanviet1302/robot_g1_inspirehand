@@ -43,6 +43,7 @@ OUTCOMES = ["success", "missed", "not_attempted", "knocked_over", "grasp_fail", 
 class ConveyorEnv(KitchenEnv):
     OBJECT_NAMES = list(CONVEYOR_NAMES)
     OBJECTS_JSON = paths.CONVEYOR_OBJECTS_JSON
+    YOLO_WEIGHTS = paths.MODELS_DIR / "detector_conveyor" / "yolo_seg.pt"
 
     def __init__(self, record: bool = False):
         super().__init__(xml_path=paths.CONVEYOR_XML, record=record)

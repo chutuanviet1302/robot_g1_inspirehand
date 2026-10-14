@@ -196,3 +196,4 @@ YOLOv8n-seg on held-out synthetic images: box mAP50 0.995 (mAP50-95 0.993), mask
 | ground_truth | 3 cm/s | 4 | 8 | 88% [72–95] | 4/8 | apple 8/8, foam_brick 8/8, meat_can 6/8, soup_can 6/8 | 0 |
 | oracle | 3 cm/s | 2 | 10 | 85% [64–95] | 7/10 | apple 4/4, foam_brick 6/6, meat_can 5/6, soup_can 2/4 | 0 |
 | oracle | 3 cm/s | 4 | 8 | 88% [72–95] | 5/8 | apple 8/8, foam_brick 8/8, meat_can 6/8, soup_can 6/8 | 0 |
+| yolo | 3 cm/s | 4 | 8 | 94% [80–98] | 6/8 | apple 8/8, foam_brick 8/8, meat_can 7/8, soup_can 7/8 | 0 |

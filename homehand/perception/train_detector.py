@@ -6,6 +6,10 @@ camera pose jitter, and random arm poses so the hands occlude objects as they do
 
     homehand perception gen-data --n 1500
     homehand perception train --epochs 40
+    homehand perception gen-data --task conveyor --n 800 && homehand perception train --task conveyor --epochs 15
+
+The conveyor detector has its own classes (the conveyor's objects) and weights; its images show the objects
+anywhere along the belt, upright or lying, at any heading.
 """
 
 from __future__ import annotations
@@ -23,6 +27,35 @@ from homehand.model.objects import CLASS_NAMES
 YOLO_DIR = paths.DATA_DIR / "perception" / "yolo"
 
 
+def _task_setup(task: str):
+    """(dataset dir, class names, env class, weights path) of a task's detector."""
+    if task == "conveyor":
+        from homehand.env.conveyor_env import ConveyorEnv
+        return paths.DATA_DIR / "perception" / "yolo_conveyor", list(ConveyorEnv.OBJECT_NAMES), ConveyorEnv, \
+            ConveyorEnv.YOLO_WEIGHTS
+    from homehand.env.kitchen_env import KitchenEnv
+    from homehand.perception.detector import YOLO_WEIGHTS
+    return YOLO_DIR, CLASS_NAMES, KitchenEnv, YOLO_WEIGHTS
+
+
+def _scatter_on_belt(env, names: list[str], rng) -> None:
+    """Conveyor images: the objects anywhere along the belt (at least 12 cm apart), upright or lying, any heading."""
+    from homehand.model.build import BELT_HALF_L
+    from homehand.model.objects import body_pose_for
+    from homehand.env.conveyor_env import BELT_Z
+    ys: list[float] = []
+    while len(ys) < len(names):
+        y = float(rng.uniform(-BELT_HALF_L + 0.06, BELT_HALF_L - 0.06))
+        if all(abs(y - o) > 0.12 for o in ys):
+            ys.append(y)
+    for name, y in zip(names, ys):
+        x, y, yaw, rest = env._sample_pose(name, y)
+        a = env.obj_qadr[name]
+        pos, quat = body_pose_for(name, rest, x, y, yaw, float(env.obj_info[name]["height"]), BELT_Z)
+        env.data.qpos[a:a + 3] = pos
+        env.data.qpos[a + 3:a + 7] = quat
+
+
 def _mask_polygon(mask: np.ndarray) -> np.ndarray | None:
     import cv2
 
@@ -36,21 +69,21 @@ def _mask_polygon(mask: np.ndarray) -> np.ndarray | None:
     return c.reshape(-1, 2) if len(c) >= 3 else None
 
 
-def gen_data(n: int = 1500, seed: int = 0, val_frac: float = 0.15) -> Path:
+def gen_data(n: int = 1500, seed: int = 0, val_frac: float = 0.15, task: str = "tidy_table") -> Path:
     import os
     os.environ.setdefault("MUJOCO_GL", "egl" if os.name != "nt" else "glfw")
     from PIL import Image
 
-    from homehand.env.kitchen_env import KitchenEnv
     from homehand.perception.camera import HeadCamera
     from homehand.perception.detector import OracleDetector
 
+    YOLO_DIR, CLASS_NAMES, Env, _ = _task_setup(task)
     if YOLO_DIR.exists():
         shutil.rmtree(YOLO_DIR)
     for split in ("train", "val"):
         (YOLO_DIR / "images" / split).mkdir(parents=True)
         (YOLO_DIR / "labels" / split).mkdir(parents=True)
-    env = KitchenEnv()
+    env = Env()
     cam = HeadCamera(env)
     oracle = OracleDetector(env)
     m = env.model
@@ -63,7 +96,14 @@ def gen_data(n: int = 1500, seed: int = 0, val_frac: float = 0.15) -> Path:
     for i in range(n):
         k = int(rng.integers(1, len(CLASS_NAMES) + 1))
         names = list(rng.choice(CLASS_NAMES, size=k, replace=False))
-        env.reset("tidy_table", seed=seed * 100_000 + i, objects=names)
+        if task == "conveyor":
+            env.reset(seed=seed * 100_000 + i, objects=names, speed=0.0)       # (all parked)
+            for nm in env.OBJECT_NAMES:
+                env._park(nm)
+            _scatter_on_belt(env, names, rng)
+            mujoco.mj_forward(m, env.data)
+        else:
+            env.reset("tidy_table", seed=seed * 100_000 + i, objects=names)
         # random arm poses: the hands often hide part of the counter during the task
         if rng.random() < 0.5:
             env.data.qpos[env.arm_qadr] += rng.normal(0, 0.25, 14)
@@ -104,19 +144,19 @@ def gen_data(n: int = 1500, seed: int = 0, val_frac: float = 0.15) -> Path:
     return yaml
 
 
-def train(epochs: int = 40, imgsz: int = 512, batch: int = 8, base: str = "yolov8n-seg.pt") -> Path:
+def train(epochs: int = 40, imgsz: int = 512, batch: int = 8, base: str = "yolov8n-seg.pt",
+          task: str = "tidy_table") -> Path:
     from ultralytics import YOLO
 
-    from homehand.perception.detector import YOLO_WEIGHTS
-
+    YOLO_DIR, _, _, YOLO_WEIGHTS = _task_setup(task)
     yaml = YOLO_DIR / "data.yaml"
     if not yaml.exists():
         raise SystemExit("no dataset - run `homehand perception gen-data` first")
     model = YOLO(base)
     project = paths.DATA_DIR / "perception" / "runs"
     model.train(data=str(yaml), epochs=epochs, imgsz=imgsz, batch=batch, workers=2, project=str(project),
-                name="yolo_seg", exist_ok=True, plots=False, verbose=False, cache=False, amp=False)  # fp16 is unreliable on GTX 16xx cards
-    best = project / "yolo_seg" / "weights" / "best.pt"
+                name="yolo_seg" if task == "tidy_table" else f"yolo_seg_{task}", exist_ok=True, plots=False, verbose=False, cache=False, amp=False)  # fp16 is unreliable on GTX 16xx cards
+    best = project / ("yolo_seg" if task == "tidy_table" else f"yolo_seg_{task}") / "weights" / "best.pt"
     YOLO_WEIGHTS.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best, YOLO_WEIGHTS)
     metrics = YOLO(str(YOLO_WEIGHTS)).val(data=str(yaml), imgsz=imgsz, batch=batch, workers=2, verbose=False,

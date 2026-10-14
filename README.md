@@ -415,15 +415,19 @@ taking turns, nominal physics, MuJoCo 3.15; raw data `data/conveyor_eval_*.json`
 | pose source | objects per episode | objects in the bin | clean episodes | protective stops |
 |---|---|---|---|---|
 | ground truth | 4 (8 ep.) | 28/32 — 88 % [72–95] | 4/8 | 0 |
-| **6-D pose from the camera** (oracle masks + ICP) | 4 (8 ep.) | **28/32 — 88 % [72–95]** | 5/8 | 0 |
+| 6-D pose from the camera (oracle masks + ICP) | 4 (8 ep.) | 28/32 — 88 % [72–95] | 5/8 | 0 |
+| **6-D pose from the camera (YOLO masks + ICP)** | 4 (8 ep.) | **30/32 — 94 % [80–98]** | 6/8 | 0 |
 | ground truth | 2 (10 ep.) | 17/20 — 85 % [64–95] | 7/10 | 0 |
 | 6-D pose from the camera | 2 (10 ep.) | 17/20 — 85 % [64–95] | 7/10 | 0 |
 
 Per object (4 per episode, camera pose): foam brick 8/8, apple 8/8, soup can 6/8, potted meat can 6/8. Losses:
 lying cans that ride past (no hand reaches either grasp at their heading in time), cans knocked over by the
 closing fingers, and once two cans dropped on the way to the bin. Single-object trials (ground-truth pose, 16–24
-per object): soup can 15/16, meat can 21/24, apple 20/20 (10/10 with each hand). Not yet measured: YOLO masks (the detector was
-trained on the tidy-table objects only) and other belt speeds. (Earlier numbers in this section were measured by
+per object): soup can 15/16, meat can 21/24, apple 20/20 (10/10 with each hand). The conveyor's YOLOv8n-seg was trained on 800 synthetic head-camera
+images of the belt (objects anywhere along it, upright or lying, hands occluding them; 15 epochs, mask mAP50 0.992,
+`homehand perception gen-data --task conveyor`, `homehand perception train --task conveyor`); with its masks the
+robot does at least as well as with oracle masks (30 vs 28 of 32 — within the noise of 8 episodes). Not yet
+measured: other belt speeds. (Earlier numbers in this section were measured by
 mistake on MuJoCo 3.11; the project environment is MuJoCo 3.15.)
 
 ## Licences

@@ -17,6 +17,7 @@ from homehand.perception.camera import Frame
 from homehand.perception.localize import Detection
 
 YOLO_WEIGHTS = paths.MODELS_DIR / "detector" / "yolo_seg.pt"
+CONVEYOR_YOLO_WEIGHTS = paths.MODELS_DIR / "detector_conveyor" / "yolo_seg.pt"   # the conveyor's objects
 MIN_PIXELS = 150
 
 
@@ -67,7 +68,7 @@ class YoloDetector:
         best: dict[str, Detection] = {}
         for i, (box, cls, score) in enumerate(zip(res.boxes.xyxy.cpu().numpy(), res.boxes.cls.cpu().numpy(),
                                                   res.boxes.conf.cpu().numpy())):
-            name = CLASS_NAMES[int(cls)]
+            name = self.model.names[int(cls)]           # (the class names stored with the weights)
             mask = None
             if masks is not None:
                 mk = masks[i]
@@ -86,11 +87,12 @@ def _resize_mask(mask: np.ndarray, h: int, w: int) -> np.ndarray:
 
 def make_detector(kind: str, env):
     """kind: 'yolo' | 'oracle' | 'auto' (yolo when trained weights exist, oracle otherwise)."""
+    weights = getattr(env, "YOLO_WEIGHTS", YOLO_WEIGHTS)     # each scene's detector knows its own objects
     if kind == "auto":
-        kind = "yolo" if YOLO_WEIGHTS.exists() else "oracle"
+        kind = "yolo" if weights.exists() else "oracle"
     if kind == "yolo":
         try:
-            return YoloDetector()
+            return YoloDetector(weights)
         except Exception as e:  # missing ultralytics / weights
             raise RuntimeError(f"YOLO detector unavailable ({e}); train it with `homehand perception train`") from e
     return OracleDetector(env)

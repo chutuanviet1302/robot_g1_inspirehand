@@ -225,15 +225,16 @@ def rl_train(steps: int = 1_000_000, workers: int = 4, randomization: str = "med
 
 
 @perception_app.command("gen-data")
-def perception_gen(n: int = 1500, seed: int = 0):
+def perception_gen(n: int = 1500, seed: int = 0, task: str = typer.Option("tidy_table", help="tidy_table | conveyor")):
     from homehand.perception.train_detector import gen_data
-    gen_data(n, seed)
+    gen_data(n, seed, task=task)
 
 
 @perception_app.command("train")
-def perception_train(epochs: int = 40, imgsz: int = 512, batch: int = 8):
+def perception_train(epochs: int = 40, imgsz: int = 512, batch: int = 8,
+                     task: str = typer.Option("tidy_table", help="tidy_table | conveyor")):
     from homehand.perception.train_detector import train as run
-    run(epochs, imgsz, batch)
+    run(epochs, imgsz, batch, task=task)
 
 
 @perception_app.command("bench")
