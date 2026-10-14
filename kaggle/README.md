@@ -17,7 +17,7 @@ The GTX 1650 (4 GB) cannot fine-tune SmolVLA (~450 M parameters); Kaggle's free 
 3. **Notebook**: kaggle.com → Code → New Notebook → File → Import Notebook → `kaggle/smolvla_finetune.ipynb`.
    In the right panel: Accelerator **GPU T4 x2**, Internet **on**, add the dataset `homehand-vla-v1` as input.
 
-4. **Run**: Save Version → **Save & Run All (Commit)**. It runs in the background (≈8 h for 20 k steps at
+4. **Run**: Save Version → **Save & Run All (Commit)**. It runs in the background (≈4.5 h for 10 k steps at
    batch 16) and the checkpoints end up in the version's Output tab.
 
 5. **Back on the laptop**: download `smolvla_homehand.zip` from the Output tab, unzip it to
