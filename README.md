@@ -358,11 +358,13 @@ unless stated, 95 % Wilson intervals:
   186 vs 185/200) with 4 of 5 kinematic markers now in the human range — no stop while carrying (v1: 1), carry
   SPARC −1.67 (v1 −2.27), reach speed peak at 34 % of the movement, hand fully open at 62 % of the reach. Still
   unlike a person: ~4× slower (joint speed limits) and a high, curved path around the other objects.
-* **SmolVLA** (images + language + joints, 3 k fine-tuning steps on a Kaggle T4 = ~0.4 epoch of 320 demos):
-  2/40 objects, 0/10 clean episodes, 3 protective stops (pressing on the counter, stopped by the safety layer);
-  with an instruction phrasing never seen in training 3/20 objects — the language conditioning does not break.
-  The pipeline runs end to end; the policy is far from trained (SmolVLA fine-tunes usually take ≥ 20 k steps).
-  On the T4 the VLM had to be loaded in float32 + AMP instead of bfloat16 (no bf16 hardware: > 7 s/step → 1.4 s/step).
+* **SmolVLA** (images + language + joints, fine-tuned on a Kaggle T4 on 320 demos, 122 k frames; same 10 tidy
+  episodes, oracle masks, nominal): after **10 k steps** (~1.3 epochs, 4 h 16 min) **12/40 objects — 30 % [18–45]**,
+  0/10 clean episodes, 4 protective stops (pressing on the counter, stopped by the safety layer); after 3 k steps it
+  was 2/40 objects with 3 stops. At 3 k steps an instruction phrasing never seen in training gave 3/20 objects — the
+  language conditioning does not break. Still far below the expert and ACT (86 %): it loses objects mostly by
+  pressing too hard (stops) and by not starting a grasp. On the T4 the VLM had to be loaded in float32 + AMP instead
+  of bfloat16 (no bf16 hardware: > 7 s/step → 1.6 s/step).
 * **Found on the way**: the mass randomisation changed `body_mass` without `mj_setConst`, so a +20 % mass made
   grasped objects slip and the simulation diverge — earlier sim-gap numbers measured that bug. Fixed and covered
   by a regression test.
