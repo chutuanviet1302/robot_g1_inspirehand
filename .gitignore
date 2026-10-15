@@ -7,6 +7,9 @@ third_party/
 /data/
 models/*
 !models/.gitkeep
+!models/flat_grasp/
+models/flat_grasp/*
+!models/flat_grasp/policy_final.npz
 web/node_modules/
 *.mp4
 *.gif
@@ -18,3 +21,4 @@ docker/dl.log
 MUJOCO_LOG.TXT
 .pytest_cache/
 runs/
+.venv-mjx/

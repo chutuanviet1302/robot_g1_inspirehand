@@ -179,6 +179,20 @@ episodes, so this table is the better guide to what the controller depends on.
 - **flow_expert_v1**: 18.24 M params, 30000 steps, batch 256, cuda, 177.6 min, final validation action-MSE 0.01168
 - dataset **expert_v1**: 870 successful skill executions / 324197 frames from 300 tidy episodes; per object {'meat_can': 236, 'mustard': 213, 'soup_can': 225, 'sugar_box': 196}; per hand {'left': 547, 'right': 323}
 
+### Flat-box grasp: expert vs expert + PPO residual (`scripts/flat_grasp_eval.py`)
+
+Policy `models/flat_grasp/policy_final.npz` (1 M steps). Wilson 95 % intervals; same seeds for both controllers.
+
+| | n | expert | expert + RL |
+|---|---|---|---|
+| training model | 300 | 62 % [56–67] | 91 % [87–94] |
+| whole robot (kitchen scene) | 200 | 61 % [55–68] | 90 % [84–93] |
+| whole robot, slippery (grip friction < 0.9) | 83 | 65 % | 95 % |
+| whole robot, heavy (≥ 0.22 kg) | 68 | 51 % | 88 % |
+| whole robot, perception error ≥ 8 mm | 85 | 56 % | 87 % |
+
+Whole robot, paired: both 110, policy only 69, expert only 13, neither 8. Raw data: `data/flat_grasp_eval*.json`.
+
 ## Perception
 
 YOLOv8n-seg on held-out synthetic images: box mAP50 0.995 (mAP50-95 0.993), mask mAP50 0.995 (mAP50-95 0.970).

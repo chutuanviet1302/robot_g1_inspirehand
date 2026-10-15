@@ -413,7 +413,36 @@ slipping out of a grasp placed from a slightly wrong pose estimate). Single-obje
 5–6 mm from the goal, upright. Failures: under `medium` mostly boxes lost while being put down, nominal mostly
 lifts that slipped before reaching 8 cm.
 
-**Reinforcement learning** (negative results, kept with their diagnosis — see "Reinforcement learning" above):
+**Reinforcement learning that works: flat-box grasp** (`homehand/rl/flat_grasp_*`; video
+[media/flat_grasp_rl_vs_expert.mp4](media/flat_grasp_rl_vs_expert.mp4)). The 3 cm flat gelatin box is the expert's
+weak spot: its open-loop top grasp, planned once from the camera's pose, misses or lets the box slip whenever the
+pose is a few mm off or the box is heavy. A PPO policy learns a *residual* on that grasp: at 50 Hz it shifts the
+expert's 13 joint targets (7 right-arm joints, 6 hand actuators) using what the robot feels — finger contacts,
+fingertip and palm positions, the observed box. Each episode randomises the box pose (±3 cm, ±0.6 rad), a
+perception bias (6 mm / 4°) plus noise, grip friction (0.6–1.5) and box mass (80–300 g).
+
+| same episodes, both controllers | expert | **expert + RL residual** |
+|---|---|---|
+| training model, 300 episodes | 62 % [56–67] | **91 % [87–94]** |
+| **whole robot in the kitchen scene, 200 episodes** | 61 % [55–68] | **90 % [84–93]** |
+| … heavy box (≥ 220 g) | 51 % | 88 % |
+| … perception error ≥ 8 mm | 56 % | 87 % |
+
+On the whole robot 69 episodes are saved by the policy and 13 lost (McNemar p < 0.001). How it got there:
+- the training model is the robot's own right arm and hand (its servos, 5 Nm wrist motors, gravity compensation),
+  the YCB box's real 7.2 × 8.9 × 2.8 cm shape, the robot's contact settings; a first version with the hand on an
+  idealised 6-DoF wrist agreed with the robot on only half of the episodes and was dropped. The model was checked
+  against the robot before training: the expert gets the same outcome on 51 of 60 episodes;
+- MJX on a Kaggle T4 ran this mesh-contact model at ~850 policy steps/s, slower than plain MuJoCo on 7 CPU cores,
+  so PPO (Stable-Baselines3) trained on the CPU: 1 M steps, 25 minutes; more training (2.4 M) did not help (91 %).
+
+```bash
+python -m homehand.rl.flat_grasp_model && python -m homehand.rl.flat_grasp_deploy --build
+python -m homehand.rl.train_flat_grasp_cpu --steps 1000000 --workers 7
+python scripts/flat_grasp_eval.py --policy models/flat_grasp/policy_final.npz --episodes 200 --robot
+```
+
+**Earlier reinforcement learning** (negative results, kept with their diagnosis — see "Reinforcement learning" above):
 
 | | success on the same episodes |
 |---|---|
