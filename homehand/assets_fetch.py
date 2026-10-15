@@ -85,9 +85,31 @@ def fetch_ycb(force: bool = False) -> None:
                 tf.extractall(paths.YCB_DIR, members=members)
 
 
+UNITREE_RL_GYM = "https://raw.githubusercontent.com/unitreerobotics/unitree_rl_gym/main/{}"
+UNITREE_RL_GYM_FILES = ("deploy/pre_train/g1/motion.pt", "deploy/deploy_mujoco/configs/g1.yaml",
+                        "deploy/deploy_mujoco/deploy_mujoco.py", "resources/robots/g1_description/g1_12dof.xml",
+                        "LICENSE")
+
+
+def fetch_unitree_rl_gym(force: bool = False) -> None:
+    """Unitree's pretrained G1 walking policy and its 12-DoF leg model (BSD-3), for the home task: five files
+    (~170 KB), not the whole repository."""
+    import urllib.request
+    dest = paths.THIRD_PARTY_DIR / "unitree_rl_gym"
+    for f in UNITREE_RL_GYM_FILES:
+        out = dest / f
+        if out.exists() and not force:
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[fetch] unitree_rl_gym {f}")
+        with urllib.request.urlopen(UNITREE_RL_GYM.format(f), timeout=60) as r:
+            out.write_bytes(r.read())
+
+
 def fetch_all(force: bool = False) -> None:
     if shutil.which("git") is None:
         raise SystemExit("git is required to fetch assets (Windows: install Git for Windows).")
     for name in SOURCES:
         fetch_one(name, force=force)
     fetch_ycb(force=force)
+    fetch_unitree_rl_gym(force=force)

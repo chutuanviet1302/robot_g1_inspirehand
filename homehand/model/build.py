@@ -65,6 +65,7 @@ def build(out_dir=None, source: str = "auto") -> None:
         build_scene(out_dir)
         build_bimanual_scene(out_dir)
         build_conveyor_scene(out_dir)
+        build_home_scene(out_dir)
         print(f"[build] robot from {paths.REPO_MODEL_DIR.name}; wrote {out_dir / paths.ROBOT_XML.name}, scene and objects")
         return
     if not paths.G1_DIR.exists() or not paths.INSPIRE_DIR.exists():
@@ -373,3 +374,70 @@ def build_conveyor_scene(out_dir=None) -> None:
     ET.indent(tree)
     tree.write(out_dir / paths.CONVEYOR_XML.name)
     print(f"[build] wrote {out_dir / paths.CONVEYOR_XML.name}")
+
+
+# Home task: the same robot on its own legs walks across a room, around obstacles, to the counter and tidies it.
+# The legs get the joints, limits, armature and foot contacts of Unitree's 12-DoF G1 model (unitree_rl_gym), whose
+# leg links are identical to ours (same frames, masses, inertias), and torque motors for the walking policy.
+HOME_START = (-2.6, 0.0, 0.0)          # x, y, yaw where the robot starts
+HOME_DOCK = (0.0, 0.0, 0.0)            # where it stands to work: the fixed-base robot's pose in every other task
+HOME_OBSTACLE_SLOTS = 6                # mocap bodies; each episode places some of them, the rest wait off-stage
+LEG_FOOT_POINTS = ("-0.05 0.025 -0.03", "-0.05 -0.025 -0.03", "0.12 0.03 -0.03", "0.12 -0.03 -0.03")
+
+
+def build_legged_robot(out_dir=None) -> None:
+    import copy
+    out_dir = Path(out_dir or paths.GENERATED_DIR)
+    ref = ET.parse(paths.THIRD_PARTY_DIR / "unitree_rl_gym" / "resources/robots/g1_description/g1_12dof.xml").getroot()
+    ref_j = {j.get("name"): j for j in ref.iter("joint")}
+    tree = ET.parse(out_dir / paths.ROBOT_XML.name)
+    root = tree.getroot()
+    root.set("model", "g1_inspire_legged")
+    pelvis = next(b for b in root.find("worldbody").iter("body") if b.get("name") == "pelvis")
+    pelvis.insert(1, ET.Element("freejoint", name="floating_base_joint"))
+    legs = []
+    for b in pelvis.iter("body"):
+        j = ref_j.get(b.get("name", "").replace("_link", "_joint"))
+        if j is None:
+            continue
+        j = copy.deepcopy(j)
+        j.attrib.update(damping="0.001", armature="0.01", frictionloss="0.1")
+        b.insert(1, j)
+        legs.append(j)
+        if b.get("name").endswith("ankle_roll_link"):
+            for p in LEG_FOOT_POINTS:          # group 3: the lidar (groups 0 and 4) does not see the robot
+                ET.SubElement(b, "geom", size="0.005", pos=p, group="3", rgba="0.2 0.2 0.2 1",
+                              friction="1 0.005 0.0001")
+    act = root.find("actuator")
+    for i, j in enumerate(legs):
+        act.insert(i, ET.Element("motor", name=j.get("name").replace("_joint", "_motor"), joint=j.get("name"),
+                                 ctrlrange=j.get("actuatorfrcrange"), ctrllimited="true"))
+    ET.indent(tree)
+    tree.write(out_dir / paths.LEGGED_ROBOT_XML.name)
+
+
+def build_home_scene(out_dir=None) -> None:
+    out_dir = Path(out_dir or paths.GENERATED_DIR)
+    if not (paths.THIRD_PARTY_DIR / "unitree_rl_gym").exists():
+        print("[build] unitree_rl_gym missing: no home scene")
+        return
+    build_legged_robot(out_dir)
+    tree = ET.parse(out_dir / paths.SCENE_XML.name)
+    root = tree.getroot()
+    root.set("model", "homehand_home")
+    root.find("include").set("file", paths.LEGGED_ROBOT_XML.name)
+    world = root.find("worldbody")
+    asset = root.find("asset")
+    ET.SubElement(asset, "material", name="obstacle_mat", rgba="0.55 0.42 0.3 1", specular="0.1")
+    for k in range(HOME_OBSTACLE_SLOTS):     # sizes set per episode (geom_size), positions via mocap
+        b = ET.SubElement(world, "body", name=f"obstacle{k}", mocap="true", pos=f"{10 + k} 5 0")
+        ET.SubElement(b, "geom", name=f"obstacle{k}", type="box", size="0.2 0.2 0.25", pos="0 0 0.25",
+                      material="obstacle_mat", group="0", condim="3")
+    # "lock": once the robot stands at the counter, the pelvis is welded where it stands (activated at run time)
+    eq = root.find("equality")
+    if eq is None:
+        eq = ET.SubElement(root, "equality")
+    ET.SubElement(eq, "weld", name="base_lock", body1="pelvis", active="false", solref="0.005 1")
+    ET.indent(tree)
+    tree.write(out_dir / paths.HOME_XML.name)
+    print(f"[build] wrote {out_dir / paths.HOME_XML.name}")

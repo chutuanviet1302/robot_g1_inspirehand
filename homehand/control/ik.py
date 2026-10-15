@@ -103,6 +103,13 @@ class ArmIK:
                 q[self.model.jnt_qposadr[self.model.joint(f"{side}_{joint}_joint").id]] = mirror * v
         return q
 
+    def set_base(self, pos, quat) -> None:
+        """Where the pelvis really is (a walking robot): targets stay in the world frame. The fixed-base tasks
+        never call this - their pelvis is where the model puts it."""
+        b = self.model.body("pelvis").id
+        self.model.body_pos[b] = np.asarray(pos, float)
+        self.model.body_quat[b] = np.asarray(quat, float)
+
     def palm_pose(self, q: np.ndarray, side: str) -> tuple[np.ndarray, np.ndarray]:
         self.cfg.update(q)
         T = self.cfg.get_transform_frame_to_world(spec.palm_site(side), "site")

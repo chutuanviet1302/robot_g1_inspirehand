@@ -52,6 +52,8 @@ class SafetyLayer:
     def __init__(self, model: mujoco.MjModel, act_ids: np.ndarray, palm_sites: dict, dt: float = spec.CONTROL_DT):
         self.model = model
         self.env_bodies: set[int] = set()   # moving parts of the environment (a conveyor belt) counted as such
+        self.check_workspace = True         # palm workspace bounds (world frame): off while a walking robot walks
+        self.workspace_offset = np.zeros(3)  # where a walking robot's pelvis stands relative to the fixed base
         lo = model.actuator_ctrlrange[act_ids, 0].copy()
         hi = model.actuator_ctrlrange[act_ids, 1].copy()
         margin = LIMIT_MARGIN * (hi - lo)
@@ -122,10 +124,10 @@ class SafetyLayer:
         if np.linalg.norm(palms["left"] - palms["right"]) < MIN_PALM_GAP:
             self.stats.self_collision += 1
             hard = hard or "palms too close"
-        for s, p in palms.items():
+        for s, p in (palms.items() if self.check_workspace else ()):
             for k, ax in enumerate("xyz"):
                 lo, hi = WORKSPACE[ax]
-                if not lo <= p[k] <= hi:
+                if not lo + self.workspace_offset[k] <= p[k] <= hi + self.workspace_offset[k]:
                     self.stats.workspace += 1
                     hard = hard or f"{s} palm outside workspace ({ax}={p[k]:.2f})"
         self.violation_steps = self.violation_steps + 1 if hard else 0

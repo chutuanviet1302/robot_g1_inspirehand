@@ -496,3 +496,32 @@ def test_api_smoke():
     # the UI's module scripts must be served as JavaScript (Windows registry MIME types say text/plain)
     for js in (paths.WEB_DIST_DIR / "assets").glob("*.js"):
         assert "javascript" in client.get(f"/assets/{js.name}").headers["content-type"]
+
+
+def test_legged_robot_walks_and_locks():
+    """Home task: the G1 walks on its own legs with Unitree's policy without falling, and the base lock holds it."""
+    from homehand import paths
+    if not (paths.THIRD_PARTY_DIR / "unitree_rl_gym" / "deploy/pre_train/g1/motion.pt").exists():
+        pytest.skip("unitree_rl_gym walking policy not downloaded")
+    pytest.importorskip("torch")
+    if not paths.HOME_XML.exists():
+        from homehand.model.build import build_home_scene
+        build_home_scene()
+    import mujoco
+    from homehand.env.home_env import HomeEnv
+    env = HomeEnv()
+    env.reset(seed=0, n_obstacles=0)
+    m, d, w = env.model, env.data, env.walker
+    x0 = w.base_pose()[0][0]
+    w.set_velocity((0.3, 0.0, 0.0))
+    for _ in range(int(2.5 / m.opt.timestep)):
+        w.physics_step()
+        mujoco.mj_step(m, d)
+    assert not w.fallen()
+    assert w.base_pose()[0][0] - x0 > 0.4                      # walked forward
+    w.lock()
+    p0 = w.base_pose()[0]
+    for _ in range(int(1.0 / m.opt.timestep)):
+        w.physics_step()
+        mujoco.mj_step(m, d)
+    assert np.linalg.norm(w.base_pose()[0] - p0) < 0.02        # held where it stood

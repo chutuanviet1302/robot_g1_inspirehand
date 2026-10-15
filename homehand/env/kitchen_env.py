@@ -318,8 +318,7 @@ class KitchenEnv:
         applied = self.safety.filter(target, self.last_action)   # joint limits + rate limits
         self.last_action = applied
         self.data.ctrl[self.act_ids] = applied
-        for _ in range(spec.N_SUBSTEPS):
-            mujoco.mj_step(self.model, self.data)
+        self._simulate()
         self.t += 1
         if self._diverged():
             self.events.append({"t": self.t, "event": "sim_error"})
@@ -336,6 +335,11 @@ class KitchenEnv:
         done = self._check_done()
         self._log_qpos()
         return self.observe(), done
+
+    def _simulate(self) -> None:
+        """One control step of physics (HomeEnv also runs the legs here, at every physics step)."""
+        for _ in range(spec.N_SUBSTEPS):
+            mujoco.mj_step(self.model, self.data)
 
     def _diverged(self) -> bool:
         w = self.data.warning

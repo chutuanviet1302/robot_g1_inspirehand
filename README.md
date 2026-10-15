@@ -270,6 +270,26 @@ and put it down. Both palms are planned together in Cartesian space with simulta
 offset, so the grip does not change while the box moves. Box pose, mass, friction, latency and finger gains are
 randomised with the same presets as the main task.
 
+**Home task: walk to the counter, then tidy it** (`homehand/env/home_env.py`, `homehand/locomotion/`,
+`homehand/control/home_controller.py`; video: [media/home_walk_tidy_hd.mp4](media/home_walk_tidy_hd.mp4)). The same robot
+on **its own legs**: the leg joints, limits and foot contacts come from Unitree's 12-DoF G1 model, and the legs are
+driven by **Unitree's pretrained walking policy** (`unitree_rl_gym`, BSD-3; downloaded into `third_party/`), which
+takes a velocity command and outputs leg joint targets at 50 Hz, with PD torques at 500 Hz. It keeps the 36 kg
+robot with two Inspire hands balanced while walking and turning. The robot starts 2.6 m from the counter with 2–4
+boxes of random size and place on the way:
+* **Sensing and planning**: a 2-D lidar (90 rays at 0.3 m height) fills an occupancy grid at 5 Hz; A* on the
+  inflated grid plans to a point in front of the counter and replans when a new obstacle appears on the path; pure
+  pursuit turns the path into walking commands (turn on the spot when far off the heading).
+* **Docking**: the last half metre on a PI position loop with a moving target (a fixed target overshot and swept
+  the arms into the objects), then 1.5 s within 3 cm / 4° before work starts.
+* **Working at the counter**: the base is **locked** where the robot stands (a weld between the pelvis and the
+  floor in simulation; on the real G1 its balance-stand mode plays this role), and the tidy-table planner runs
+  unchanged, with the arms' IK told where the pelvis really is (`ArmIK.set_base`). Two alternatives were measured
+  and dropped: keeping the walking policy stepping in place sways the pelvis by ±7 cm (with per-step IK
+  compensation of the arms: 31–50 % of the objects); a hand-written balance stand without stepping holds within
+  1 cm when it starts from the default stance, but the walk-to-stand switch fell 3 times in 8
+  (`Walker.stand`, kept for reference).
+
 **Conveyor task** (`homehand/env/conveyor_env.py`, `homehand/perception/pose6d.py`, `tracker.py`,
 `homehand/control/conveyor_planner.py`, `conveyor_skill.py`; its own scene file). A belt runs across the counter
 in front of the chest (3 cm/s by default; a slab on a slide joint driven at constant speed, so objects ride it by
@@ -431,6 +451,11 @@ images of the belt (objects anywhere along it, upright or lying, hands occluding
 robot does at least as well as with oracle masks (30 vs 28 of 32 — within the noise of 8 episodes). Not yet
 measured: other belt speeds. (Earlier numbers in this section were measured by
 mistake on MuJoCo 3.11; the project environment is MuJoCo 3.15.)
+
+**Home task** (`python scripts/home_eval.py --perception yolo --episodes 16`; raw data `data/home_eval_yolo.json`):
+16/16 episodes reached the counter with **no bump and no fall** (2–4 obstacles, mean walk 20.7 s), stop-point error
+median 2.0 cm (max 2.5); then **56/64 objects in the bin — 88 % [77–94]**, 8/16 clean episodes (YOLO perception), on
+par with the fixed-base robot. Losses: 5 objects knocked over, 2 dropped, 1 released next to the bin.
 
 ## Licences
 
