@@ -80,7 +80,7 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
          replay: bool = typer.Option(None, "--replay/--live",
                                      help="simulate each episode first, then play it back smoothly (default for the "
                                           "conveyor: live viewing stalls while the controller plans)")):
-    """Open the native MuJoCo viewer and watch the robot tidy the counter (orbit with the mouse)."""
+    """Open the native MuJoCo viewer and watch the robot (orbit with the mouse; R plays a replayed episode again)."""
     import time
 
     import mujoco.viewer
@@ -115,7 +115,13 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
         planner = TidyPlanner(env, perception=perception, policy=policy)
     if replay is None:
         replay = task == "conveyor"
-    with mujoco.viewer.launch_passive(env.model, env.data) as v:
+    again = {"flag": False}
+
+    def on_key(keycode: int) -> None:     # R: play the last episode again from the start
+        if keycode == ord("R"):
+            again["flag"] = True
+
+    with mujoco.viewer.launch_passive(env.model, env.data, key_callback=on_key) as v:
         v.cam.lookat[:] = (0.38, 0.0, 0.9)
         v.cam.distance, v.cam.azimuth, v.cam.elevation = 1.5, 150, -22
         if task.startswith("home"):            # the whole room: start, obstacles and counter
@@ -134,21 +140,31 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
                     env.data.mocap_pos[:], env.data.mocap_quat[:] = r["mocap"]
                     for g, (size, pos) in r["obstacle_geoms"].items():
                         env.model.geom_size[g], env.model.geom_pos[g] = size, pos
-            t_wall = time.perf_counter()
-            for q in r["qpos"]:
-                if not v.is_running():
-                    break
-                with v.lock():
-                    env.data.qpos[:] = q
-                    mujoco.mj_forward(env.model, env.data)
-                v.sync()
-                t_wall += spec.CONTROL_DT / speed
-                if (delay := t_wall - time.perf_counter()) > 0:
-                    time.sleep(delay)
+
+            def play() -> None:
+                again["flag"] = False
+                t_wall = time.perf_counter()
+                k = 0
+                while k < len(r["qpos"]) and v.is_running():
+                    if again["flag"]:                       # R pressed while playing: from the start
+                        again["flag"], k, t_wall = False, 0, time.perf_counter()
+                    with v.lock():
+                        env.data.qpos[:] = r["qpos"][k]
+                        mujoco.mj_forward(env.model, env.data)
+                    v.sync()
+                    k += 1
+                    t_wall += spec.CONTROL_DT / speed
+                    if (delay := t_wall - time.perf_counter()) > 0:
+                        time.sleep(delay)
+
+            play()
             if not loop:
-                typer.echo("episode finished; close the window to exit")
+                typer.echo("episode finished: press R in the viewer to watch it again, close the window to exit")
                 while v.is_running():
-                    time.sleep(0.2)
+                    if again["flag"]:
+                        typer.echo("  playing again")
+                        play()
+                    time.sleep(0.05)
                 break
             seed += 1
         while not replay and v.is_running():
