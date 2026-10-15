@@ -270,7 +270,7 @@ and put it down. Both palms are planned together in Cartesian space with simulta
 offset, so the grip does not change while the box moves. Box pose, mass, friction, latency and finger gains are
 randomised with the same presets as the main task.
 
-**Home task: walk to the counter, then tidy it** (`homehand/env/home_env.py`, `homehand/locomotion/`,
+**Home tasks: walk to the counter (or the conveyor), then do the job** (`homehand/env/home_env.py`, `homehand/locomotion/`,
 `homehand/control/home_controller.py`; video: [media/home_walk_tidy_hd.mp4](media/home_walk_tidy_hd.mp4)). The same robot
 on **its own legs**: the leg joints, limits and foot contacts come from Unitree's 12-DoF G1 model, and the legs are
 driven by **Unitree's pretrained walking policy** (`unitree_rl_gym`, BSD-3; downloaded into `third_party/`), which
@@ -456,6 +456,15 @@ mistake on MuJoCo 3.11; the project environment is MuJoCo 3.15.)
 16/16 episodes reached the counter with **no bump and no fall** (2–4 obstacles, mean walk 20.7 s), stop-point error
 median 2.0 cm (max 2.5); then **56/64 objects in the bin — 88 % [77–94]**, 8/16 clean episodes (YOLO perception), on
 par with the fixed-base robot. Losses: 5 objects knocked over, 2 dropped, 1 released next to the bin.
+
+**Home conveyor** (the same walk, then the conveyor task: `python scripts/home_eval.py --task home_conveyor
+--perception yolo --episodes 16`; video [media/home_conveyor_hd.mp4](media/home_conveyor_hd.mp4)). The belt only
+starts once the robot is locked in place. 16/16 episodes reached the belt with no bump and no fall (stop error
+about 2 cm); **52/64 objects in the bins — 81 % [70–89]**, 7/16 clean (YOLO). One of the 16 episodes lost all
+four objects, and in a second run (8 episodes, one worker) another one did; both were the fourth episode run by the
+same worker process and clear 4/4 when run alone (deterministic), so state leaks between episodes within one
+process. Without those two, 52/60 and 26/28. `home_eval.py` now starts a fresh process per episode; this has not
+been re-measured yet. The other losses are objects riding past or knocked over, as on the fixed base.
 
 ## Licences
 

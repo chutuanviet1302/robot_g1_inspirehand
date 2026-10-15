@@ -525,3 +525,22 @@ def test_legged_robot_walks_and_locks():
         w.physics_step()
         mujoco.mj_step(m, d)
     assert np.linalg.norm(w.base_pose()[0] - p0) < 0.02        # held where it stood
+
+
+def test_home_conveyor_belt_waits_for_the_robot():
+    """Conveyor in the room: no object comes onto the belt before the robot stands at it."""
+    from homehand import paths
+    if not (paths.THIRD_PARTY_DIR / "unitree_rl_gym" / "deploy/pre_train/g1/motion.pt").exists():
+        pytest.skip("unitree_rl_gym walking policy not downloaded")
+    pytest.importorskip("torch")
+    if not paths.HOME_CONVEYOR_XML.exists():
+        from homehand.model.build import build_home_scene
+        build_home_scene()
+    from homehand.env.home_env import HomeConveyorEnv
+    env = HomeConveyorEnv()
+    env.reset(seed=0, n_obstacles=2)
+    for _ in range(50):
+        env.step(env.home_ctrl)
+    assert not env.tracks and env.speed == 0.0            # nothing spawned, belt still
+    env.start_belt()
+    assert env.speed > 0 and env.queue and env.queue[0][0] >= env.t

@@ -17,6 +17,7 @@ import mujoco
 import numpy as np
 
 from homehand import paths
+from homehand.env.conveyor_env import ConveyorEnv
 from homehand.env.kitchen_env import KitchenEnv
 from homehand.locomotion.walker import Walker
 from homehand.model import spec
@@ -27,9 +28,11 @@ OBSTACLE_AREA = ((-2.05, -0.75), (-1.1, 1.1))     # x, y range of obstacle centr
 PARK = (3.0, 0.0)                  # unused objects wait behind the counter, out of the robot's way
 
 
-class HomeEnv(KitchenEnv):
-    def __init__(self, record: bool = False):
-        super().__init__(xml_path=paths.HOME_XML, record=record)
+class WalkingMixin:
+    """The legged robot in a room with obstacles: walker, obstacle placement, bump / fall bookkeeping. Mixed into
+    the tidy-table and the conveyor environments (before them, so its `_simulate` / `step` come first)."""
+
+    def _init_walking(self) -> None:
         m = self.model
         self.walker = Walker(m, self.data)
         self.pelvis = m.body("pelvis").id
@@ -45,16 +48,11 @@ class HomeEnv(KitchenEnv):
         return False
 
     # ------------------------------------------------------------------ reset
-    def reset(self, task: str = "home", seed: int = 0, objects=None, randomization=None, layout=None,
-              n_obstacles: int | None = None) -> dict:
-        super().reset("tidy_table", seed=seed, objects=objects, randomization=randomization, layout=layout)
+    def _after_reset(self, task: str, n_obstacles: int | None) -> None:
+        """Called at the end of the task's own reset: obstacles, robot at the start, walking bookkeeping."""
         self.task = task
         self.info.task = task
         m, d = self.model, self.data
-        used = {n for n, *_ in self.layout}
-        for k, name in enumerate(n for n in self.OBJECT_NAMES if n not in used):
-            a = self.obj_qadr[name]
-            d.qpos[a:a + 3] = [PARK[0], PARK[1] + 0.25 * k, 0.001]
         self.obstacles = self._place_obstacles(n_obstacles)
         self.walker.place(*HOME_START)
         mujoco.mj_forward(m, d)
@@ -69,7 +67,6 @@ class HomeEnv(KitchenEnv):
         self._prev_xy = d.qpos[self.walker.base_q:self.walker.base_q + 2].copy()
         self.traj_qpos = []
         self._log_qpos()
-        return self.observe()
 
     def _place_obstacles(self, n: int | None) -> list[dict]:
         """2-4 boxes / stools between the start and the counter, never blocking every way through."""
@@ -157,3 +154,66 @@ class HomeEnv(KitchenEnv):
 
     def base_pose(self):
         return self.walker.base_pose()
+
+
+class HomeEnv(WalkingMixin, KitchenEnv):
+    """Walk to the counter, tidy it."""
+
+    def __init__(self, record: bool = False):
+        KitchenEnv.__init__(self, xml_path=paths.HOME_XML, record=record)
+        self._init_walking()
+
+    def reset(self, task: str = "home", seed: int = 0, objects=None, randomization=None, layout=None,
+              n_obstacles: int | None = None) -> dict:
+        KitchenEnv.reset(self, "tidy_table", seed=seed, objects=objects, randomization=randomization, layout=layout)
+        used = {n for n, *_ in self.layout}
+        for k, name in enumerate(n for n in self.OBJECT_NAMES if n not in used):
+            a = self.obj_qadr[name]
+            self.data.qpos[a:a + 3] = [PARK[0], PARK[1] + 0.25 * k, 0.001]
+        self._after_reset(task, n_obstacles)
+        return self.observe()
+
+
+class HomeConveyorEnv(WalkingMixin, ConveyorEnv):
+    """Walk to the conveyor, then pick the objects it brings. The belt starts only once the robot stands at it
+    (`start_belt`, called by the controller): objects passing while it walks would just ride past."""
+
+    def __init__(self, record: bool = False):
+        ConveyorEnv.__init__(self, record=record, xml_path=paths.HOME_CONVEYOR_XML)
+        self._init_walking()
+
+    def reset(self, task: str = "home_conveyor", seed: int = 0, objects=None, randomization=None, layout=None,
+              speed: float = 0.03, n_objects: int = 4, gap=None, n_obstacles: int | None = None) -> dict:
+        from homehand.env.conveyor_env import GAP
+        ConveyorEnv.reset(self, "conveyor", seed=seed, objects=objects, randomization=randomization,
+                          speed=speed, n_objects=n_objects, gap=gap or GAP)
+        # hold the belt: the spawn plan starts when the robot is ready (the conveyor's reset already put the first
+        # object on the belt: back into the plan with it)
+        spawned = [(0, *entry) for entry in self.layout]
+        for name in list(self.tracks):
+            self._park(name)
+        self.tracks, self.layout = {}, []
+        self.events = [e for e in self.events if e.get("event") != "spawned"]
+        self._pending = (spawned + list(self.queue), self.speed, self.horizon)
+        self.queue, self.speed = [], 0.0
+        self.data.ctrl[self.belt_act] = 0.0
+        self.data.qvel[self.belt_dof] = 0.0
+        self.belt_started = False
+        self._after_reset(task, n_obstacles)
+        return self.observe()
+
+    def start_belt(self) -> None:
+        queue, speed, horizon = self._pending
+        self.queue = [(s + self.t, *rest) for s, *rest in queue]
+        self.speed = speed
+        self.horizon = self.t + horizon
+        self.belt_started = True
+        self.events.append({"t": self.t, "event": "belt_start"})
+
+    def _check_done(self) -> bool:
+        if not self.belt_started:
+            if self.t >= self.horizon:
+                self._finish()
+                return True
+            return False
+        return super()._check_done()

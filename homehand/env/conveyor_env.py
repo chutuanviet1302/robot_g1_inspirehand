@@ -45,8 +45,8 @@ class ConveyorEnv(KitchenEnv):
     OBJECTS_JSON = paths.CONVEYOR_OBJECTS_JSON
     YOLO_WEIGHTS = paths.MODELS_DIR / "detector_conveyor" / "yolo_seg.pt"
 
-    def __init__(self, record: bool = False):
-        super().__init__(xml_path=paths.CONVEYOR_XML, record=record)
+    def __init__(self, record: bool = False, xml_path=None):
+        super().__init__(xml_path=xml_path or paths.CONVEYOR_XML, record=record)
         self.belt_geom = self.model.geom("belt").id
         self.belt_act = self.model.actuator("belt_drive").id
         self.belt_qadr = self.model.jnt_qposadr[self.model.joint("belt_slide").id]

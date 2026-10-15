@@ -28,7 +28,8 @@ SCENE_XML = GENERATED_DIR / "scene_kitchen.xml"
 BIMANUAL_XML = GENERATED_DIR / "scene_bimanual.xml"   # the kitchen scene + a large box lifted with both hands
 CONVEYOR_XML = GENERATED_DIR / "scene_conveyor.xml"   # the kitchen scene + a conveyor belt across the counter
 LEGGED_ROBOT_XML = GENERATED_DIR / "g1_inspire_legged.xml"   # the same robot on its own legs (free-floating base)
-HOME_XML = GENERATED_DIR / "scene_home.xml"      # the kitchen counter in a room the robot walks through
+HOME_XML = GENERATED_DIR / "scene_home.xml"
+HOME_CONVEYOR_XML = GENERATED_DIR / "scene_home_conveyor.xml"   # the conveyor in that room      # the kitchen counter in a room the robot walks through
 OBJECTS_JSON = GENERATED_DIR / "objects.json"
 CONVEYOR_OBJECTS_JSON = GENERATED_DIR / "objects_conveyor.json"
 

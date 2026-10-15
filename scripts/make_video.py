@@ -4,6 +4,7 @@
     python scripts/make_video.py --task tidy_table --seed 8 --perception yolo --out media/tidy_hd.mp4
     python scripts/make_video.py --task bimanual_lift --seed 4 --out media/bimanual_hd.mp4
     python scripts/make_video.py --task home --seed 1 --perception yolo --out media/home_hd.mp4
+    python scripts/make_video.py --task home_conveyor --seed 0 --perception yolo --out media/home_conveyor_hd.mp4
 
 The episode runs first, recording the joint and object positions; the frames are then rendered from that record
 with a fixed free camera (no stalls while a planner thinks), at `--speedup` x real time.
@@ -24,8 +25,10 @@ CAMERAS = {
     "bimanual_lift": ([0.33, 0.0, 0.93], 140.0, -22.0, 1.20),
     # home: a wide view of the room while the robot walks, then the tidy-table view once it is at the counter
     "home": ([-1.15, 0.0, 0.55], 140.0, -32.0, 4.3),
+    "home_conveyor": ([-1.15, 0.0, 0.55], 140.0, -32.0, 4.3),
 }
-HOME_CLOSE = ([0.25, 0.0, 0.95], 205.0, -30.0, 1.9)
+HOME_CLOSE = {"home": ([0.25, 0.0, 0.95], 205.0, -30.0, 1.9),
+              "home_conveyor": ([0.22, 0.0, 0.95], 180.0, -30.0, 1.45)}
 HOME_BLEND_S = 2.0
 
 
@@ -39,10 +42,10 @@ def simulate(task: str, seed: int, perception: str, objects: int):
         reset = env.reset
         env.reset = lambda task="conveyor", seed=0, objects=None, randomization=None, layout=None: reset(
             task, seed=seed, n_objects=objects or 4)
-    elif task == "home":
+    elif task in ("home", "home_conveyor"):
         from homehand.control.home_controller import HomeController
-        from homehand.env.home_env import HomeEnv
-        env = HomeEnv()
+        from homehand.env.home_env import HomeConveyorEnv, HomeEnv
+        env = HomeConveyorEnv() if task == "home_conveyor" else HomeEnv()
         controller = HomeController(env, perception=perception)
     elif task == "bimanual_lift":
         from homehand.control.bimanual import BimanualExpert
@@ -57,7 +60,7 @@ def simulate(task: str, seed: int, perception: str, objects: int):
     qpos = []
     res = run_episode(env, controller, task=task, seed=seed, on_step=lambda obs, a: qpos.append(env.data.qpos.copy()))
     res["switch_step"] = next((e["t"] for e in getattr(controller, "nav_log", []) if e["event"] == "approach"), None)
-    if task == "home":
+    if task.startswith("home"):
         print("nav:", env.info.details.get("nav"))
     return env, qpos, res
 
@@ -94,17 +97,17 @@ def main() -> None:
 
     def set_cam(step: int) -> None:
         u = 0.0
-        if a.task == "home" and res["switch_step"] is not None:
+        if a.task.startswith("home") and res["switch_step"] is not None:
             u = float(np.clip((step - res["switch_step"]) * spec.CONTROL_DT / HOME_BLEND_S, 0, 1))
             u = u * u * (3 - 2 * u)
-        lk = np.array(look) + (np.array(HOME_CLOSE[0]) - np.array(look)) * u
-        cam.lookat[:] = lk
-        cam.azimuth = az + (HOME_CLOSE[1] - az) * u
-        cam.elevation = el + (HOME_CLOSE[2] - el) * u
-        cam.distance = dist + (HOME_CLOSE[3] - dist) * u
+        close = HOME_CLOSE.get(a.task, (look, az, el, dist))
+        cam.lookat[:] = np.array(look) + (np.array(close[0]) - np.array(look)) * u
+        cam.azimuth = az + (close[1] - az) * u
+        cam.elevation = el + (close[2] - el) * u
+        cam.distance = dist + (close[3] - dist) * u
     # skip the idle start (nothing moves until the first object or reach)
     first = next((i for i, q in enumerate(qpos) if i > 0 and np.abs(q - qpos[0]).max() > 1e-3), 0)
-    if a.task == "home":
+    if a.task.startswith("home"):
         first = 25                       # the walk starts at once
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -422,7 +422,14 @@ def build_home_scene(out_dir=None) -> None:
         print("[build] unitree_rl_gym missing: no home scene")
         return
     build_legged_robot(out_dir)
-    tree = ET.parse(out_dir / paths.SCENE_XML.name)
+    _home_variant(out_dir, paths.SCENE_XML.name, paths.HOME_XML.name)
+    if (out_dir / paths.CONVEYOR_XML.name).exists():
+        _home_variant(out_dir, paths.CONVEYOR_XML.name, paths.HOME_CONVEYOR_XML.name)
+
+
+def _home_variant(out_dir: Path, scene_in: str, scene_out: str) -> None:
+    """A scene with the legged robot, obstacle slots and the base-lock weld."""
+    tree = ET.parse(out_dir / scene_in)
     root = tree.getroot()
     root.set("model", "homehand_home")
     root.find("include").set("file", paths.LEGGED_ROBOT_XML.name)
@@ -439,5 +446,5 @@ def build_home_scene(out_dir=None) -> None:
         eq = ET.SubElement(root, "equality")
     ET.SubElement(eq, "weld", name="base_lock", body1="pelvis", active="false", solref="0.005 1")
     ET.indent(tree)
-    tree.write(out_dir / paths.HOME_XML.name)
-    print(f"[build] wrote {out_dir / paths.HOME_XML.name}")
+    tree.write(out_dir / scene_out)
+    print(f"[build] wrote {out_dir / scene_out}")

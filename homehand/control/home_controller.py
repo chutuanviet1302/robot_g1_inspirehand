@@ -1,4 +1,7 @@
-"""Home task controller: walk to the counter around obstacles, stop in front of it, tidy it.
+"""Home task controller: walk to the counter (or the conveyor) around obstacles, stop in front of it, do the job.
+
+The job is the tidy-table planner at the counter, or the conveyor planner at the belt (`HomeConveyorEnv`: the
+belt starts when the robot is locked in place).
 
 Phases
 1. navigate  the lidar scans at 5 Hz into an occupancy grid; A* plans from where the robot stands to a point
@@ -43,7 +46,12 @@ class HomeController:
     def __init__(self, env, perception: str = "auto", ik: ArmIK | None = None):
         self.env = env
         self.ik = ik or ArmIK()
-        self.tidy = TidyPlanner(env, perception=perception, ik=self.ik)
+        self.conveyor = hasattr(env, "start_belt")
+        if self.conveyor:      # the conveyor variant: pick off the belt once standing at it
+            from homehand.control.conveyor_planner import ConveyorPlanner
+            self.tidy = ConveyorPlanner(env, perception=perception, ik=self.ik)
+        else:
+            self.tidy = TidyPlanner(env, perception=perception, ik=self.ik)
         self.perception_mode = self.tidy.perception_mode
         self.skill_kind = "expert"
         self.pre_dock = np.array([HOME_DOCK[0] - PRE_DOCK_BACK, HOME_DOCK[1]])
@@ -59,11 +67,11 @@ class HomeController:
 
     @property
     def last_perception(self):
-        return self.tidy.last_perception if self.stage == "tidy" else None
+        return getattr(self.tidy, "last_perception", None) if self.stage == "tidy" else None
 
     @property
     def current(self):
-        return self.tidy.current if self.stage == "tidy" else None
+        return getattr(self.tidy, "current", None) if self.stage == "tidy" else None
 
     @property
     def log(self):
@@ -138,6 +146,9 @@ class HomeController:
                 self.ik.set_base(*self.base_ref)
                 self.q_comp = None
                 self.stage = "tidy"
+                if self.conveyor:
+                    env.start_belt()                   # the belt runs from now on
+                    obs = env.observe()
                 self.tidy.reset(obs)
             return self._hold_arms()
         a = self.tidy.act(obs)
