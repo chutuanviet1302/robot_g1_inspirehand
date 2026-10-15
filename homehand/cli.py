@@ -72,7 +72,7 @@ def demo(seed: int = 0, perception: str = "auto", controller: str = "expert", ou
 @app.command()
 def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", speed: float = 1.0,
          loop: bool = typer.Option(False, help="keep running the next seed after each episode"),
-         task: str = typer.Option("tidy_table", help="tidy_table | bimanual_lift | conveyor"),
+         task: str = typer.Option("tidy_table", help="tidy_table | bimanual_lift | conveyor | home | home_conveyor"),
          randomization: str = "nominal",
          belt_speed: float = typer.Option(0.03, help="conveyor: belt speed in m/s (0 = stopped)"),
          objects: int = typer.Option(4, help="conveyor: objects per episode (1-4)"),
@@ -90,7 +90,12 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
     from homehand.model import spec
 
     reset_kw = {}
-    if task == "conveyor":
+    if task in ("home", "home_conveyor"):      # walk to the counter / the belt, then work (always replayed)
+        from homehand.env.home_env import HomeConveyorEnv, HomeEnv
+        env = HomeConveyorEnv() if task == "home_conveyor" else HomeEnv()
+        planner = None
+        replay = True
+    elif task == "conveyor":
         from homehand.control.conveyor_planner import ConveyorPlanner
         from homehand.env.conveyor_env import ConveyorEnv
         env = ConveyorEnv()
@@ -113,12 +118,22 @@ def view(seed: int = 0, perception: str = "oracle", controller: str = "expert", 
     with mujoco.viewer.launch_passive(env.model, env.data) as v:
         v.cam.lookat[:] = (0.38, 0.0, 0.9)
         v.cam.distance, v.cam.azimuth, v.cam.elevation = 1.5, 150, -22
+        if task.startswith("home"):            # the whole room: start, obstacles and counter
+            v.cam.lookat[:] = (-1.1, 0.0, 0.6)
+            v.cam.distance, v.cam.azimuth, v.cam.elevation = 4.4, 140, -32
         while replay and v.is_running():
             from homehand.replay import simulate_in_subprocess
             typer.echo(f"seed {seed}: simulating ...")
             r = simulate_in_subprocess({"task": task, "seed": seed, "randomization": randomization,
                                         "perception": perception, "reset_kw": reset_kw})
             typer.echo(f"  objects {r['objects']} -> {r['outcome']} {r['object_outcomes']} (playing back)")
+            if "nav" in r:
+                typer.echo(f"  walk: {r['nav']}")
+            if "mocap" in r:
+                with v.lock():
+                    env.data.mocap_pos[:], env.data.mocap_quat[:] = r["mocap"]
+                    for g, (size, pos) in r["obstacle_geoms"].items():
+                        env.model.geom_size[g], env.model.geom_pos[g] = size, pos
             t_wall = time.perf_counter()
             for q in r["qpos"]:
                 if not v.is_running():

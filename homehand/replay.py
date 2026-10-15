@@ -27,6 +27,11 @@ def simulate(args: dict) -> dict:
         kw = args.get("reset_kw", {})
         env.reset = lambda task="conveyor", seed=0, objects=None, randomization=None, layout=None: reset(
             task, seed=seed, objects=objects, randomization=randomization, **kw)
+    elif task in ("home", "home_conveyor"):
+        from homehand.control.home_controller import HomeController
+        from homehand.env.home_env import HomeConveyorEnv, HomeEnv
+        env = HomeConveyorEnv() if task == "home_conveyor" else HomeEnv()
+        controller = HomeController(env, perception=args["perception"])
     elif task == "bimanual_lift":
         from homehand.control.bimanual import BimanualExpert
         from homehand.env.bimanual_env import BimanualEnv
@@ -40,8 +45,14 @@ def simulate(args: dict) -> dict:
     qpos = []
     r = run_episode(env, controller, task=task, seed=args["seed"], randomization=args.get("randomization"),
                     on_step=lambda obs, a: qpos.append(env.data.qpos.copy()))
-    return {"qpos": np.asarray(qpos), "outcome": r["outcome"], "object_outcomes": dict(r["object_outcomes"]),
-            "objects": [str(o) for o in r["objects"]]}
+    out = {"qpos": np.asarray(qpos), "outcome": r["outcome"], "object_outcomes": dict(r["object_outcomes"]),
+           "objects": [str(o) for o in r["objects"]]}
+    if task in ("home", "home_conveyor"):     # obstacles are mocap bodies with per-episode sizes: not in qpos
+        m, d = env.model, env.data
+        out["mocap"] = (d.mocap_pos.copy(), d.mocap_quat.copy())
+        out["obstacle_geoms"] = {int(g): (m.geom_size[g].copy(), m.geom_pos[g].copy()) for g in env.obstacle_geoms}
+        out["nav"] = env.info.details.get("nav")
+    return out
 
 
 def simulate_in_subprocess(args: dict) -> dict:
